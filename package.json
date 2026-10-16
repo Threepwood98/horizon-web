@@ -1,0 +1,48 @@
+{
+  "name": "horizon-web",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@11.28.5",
+  "type": "module",
+  "scripts": {
+    "build": "next build",
+    "composer:deploy": "prisma deploy module.ts",
+    "composer:dev": "prisma dev module.ts",
+    "contract:emit": "prisma contract emit",
+    "db:init": "prisma db init",
+    "db:update": "prisma db update",
+    "db:verify": "prisma db verify",
+    "deploy": "pnpm run build && pnpm run composer:deploy",
+    "dev": "next dev",
+    "dev:composer": "pnpm run build && pnpm run composer:dev",
+    "lint": "eslint",
+    "migrate": "prisma db migrate",
+    "migration:plan": "prisma migration plan",
+    "migration:show": "prisma migration show",
+    "migration:status": "prisma migration status",
+    "skills:sync": "prisma skills sync || exit 0",
+    "start": "next start",
+    "postinstall": "prisma skills sync || exit 0"
+  },
+  "dependencies": {
+    "@prisma/composer": "0.28.0",
+    "@prisma/composer-prisma-cloud": "0.28.0",
+    "@prisma/orm-postgres": "8.0.0-rc.16",
+    "alchemy": "2.0.0-beta.78",
+    "next": "16.4.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "temporal-polyfill": "^1.0.5"
+  },
+  "devDependencies": {
+    "@prisma/dev": "0.25.2",
+    "@types/node": "^26.6.4",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "eslint": "^10.12.0",
+    "eslint-config-next": "16.4.0",
+    "prisma": "8.0.0-rc.21",
+    "tsx": "^4.23.15",
+    "typescript": "^6.0.3"
+  }
+}
