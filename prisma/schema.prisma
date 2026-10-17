@@ -1,0 +1,161 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum UserRole {
+  user
+  leader
+  manager
+  admin
+
+  @@map("user_role")
+}
+
+enum ReportStatus {
+  draft
+  sent
+  accepted
+  rejected
+
+  @@map("report_status")
+}
+
+// Better Auth core model generated with its CLI, extended with server-owned fields.
+model User {
+  id              String    @id
+  name            String
+  email           String    @unique
+  emailVerified   Boolean   @default(false) @map("email_verified")
+  image           String?
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+  role            UserRole  @default(user)
+  teamId          String?   @map("team_id")
+  team            Team?     @relation("TeamMembers", fields: [teamId], references: [id], onDelete: SetNull)
+  ledTeam         Team?     @relation("TeamLeader")
+  sessions        Session[]
+  accounts        Account[]
+  reports         Report[]  @relation("ReportOwner")
+  reviewedReports Report[]  @relation("ReportReviewer")
+
+  @@index([teamId])
+  @@map("user")
+}
+
+// Better Auth core model generated with its CLI.
+model Session {
+  id        String   @id
+  expiresAt DateTime @map("expires_at")
+  token     String   @unique
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  ipAddress String?  @map("ip_address")
+  userAgent String?  @map("user_agent")
+  userId    String   @map("user_id")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("session")
+}
+
+// Better Auth core model generated with its CLI.
+model Account {
+  id                    String    @id
+  accountId             String    @map("account_id")
+  providerId            String    @map("provider_id")
+  userId                String    @map("user_id")
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?   @map("access_token")
+  refreshToken          String?   @map("refresh_token")
+  idToken               String?   @map("id_token")
+  accessTokenExpiresAt  DateTime? @map("access_token_expires_at")
+  refreshTokenExpiresAt DateTime? @map("refresh_token_expires_at")
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
+
+  @@index([userId])
+  @@map("account")
+}
+
+// Better Auth core model generated with its CLI.
+model Verification {
+  id         String   @id
+  identifier String
+  value      String
+  expiresAt  DateTime @map("expires_at")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  @@index([identifier])
+  @@map("verification")
+}
+
+model Team {
+  id       String        @id @default(cuid())
+  name     String        @unique
+  leaderId String?       @unique @map("leader_id")
+  leader   User?         @relation("TeamLeader", fields: [leaderId], references: [id], onDelete: SetNull)
+  members  User[]        @relation("TeamMembers")
+  accounts SiteAccount[]
+  reports  Report[]
+
+  @@map("team")
+}
+
+model Website {
+  id       String        @id @default(cuid())
+  name     String        @unique
+  active   Boolean       @default(true)
+  logoUrl  String?       @map("logo_url")
+  accounts SiteAccount[]
+  reports  Report[]
+
+  @@map("website")
+}
+
+model SiteAccount {
+  teamId         String  @map("team_id")
+  websiteId      String  @map("website_id")
+  openingBalance Decimal @default(0) @map("opening_balance") @db.Decimal(12, 2)
+  team           Team    @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  website        Website @relation(fields: [websiteId], references: [id], onDelete: Cascade)
+
+  @@id([teamId, websiteId])
+  @@index([websiteId])
+  @@map("site_account")
+}
+
+model Report {
+  id            String       @id @default(cuid())
+  userId        String       @map("user_id")
+  teamId        String       @map("team_id")
+  websiteId     String       @map("website_id")
+  date          DateTime     @db.Date
+  amount        Decimal      @db.Decimal(12, 2)
+  startAmount   Decimal?     @map("start_amount") @db.Decimal(12, 2)
+  endAmount     Decimal?     @map("end_amount") @db.Decimal(12, 2)
+  status        ReportStatus @default(draft)
+  rejectionNote String?      @map("rejection_note")
+  sentAt        DateTime?    @map("sent_at")
+  reviewedById  String?      @map("reviewed_by_id")
+  reviewedAt    DateTime?    @map("reviewed_at")
+  createdAt     DateTime     @default(now()) @map("created_at")
+  user          User         @relation("ReportOwner", fields: [userId], references: [id], onDelete: Restrict)
+  team          Team         @relation(fields: [teamId], references: [id], onDelete: Restrict)
+  website       Website      @relation(fields: [websiteId], references: [id], onDelete: Restrict)
+  reviewedBy    User?        @relation("ReportReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+
+  @@index([userId, date])
+  @@index([websiteId, date])
+  @@index([teamId, status])
+  @@index([teamId, websiteId, status])
+  @@index([reviewedById])
+  @@map("report")
+}

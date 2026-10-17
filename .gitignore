@@ -1,5 +1,12 @@
 node_modules/
 dist/
 .env
+!.env.example
+.next/
+.next-build/
+.next-fresh/
+src/generated/prisma/
+coverage/
+*.tsbuildinfo
 /.alchemy
 /.prisma-composer
