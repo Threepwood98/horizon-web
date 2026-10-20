@@ -3,6 +3,7 @@
 import { useActionState, useEffect, useRef, useState } from "react";
 import {
   ArrowRightIcon,
+  CalendarIcon,
   FilePlus2Icon,
   FilesIcon,
   PencilIcon,
@@ -10,6 +11,7 @@ import {
   Trash2Icon,
   WalletCardsIcon,
 } from "lucide-react";
+import { es } from "react-day-picker/locale";
 
 import {
   deleteReportAction,
@@ -20,6 +22,7 @@ import { ActionFeedback, formatReportDate, ReportStatusBadge } from "@/component
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Calendar } from "@/components/ui/calendar";
 import {
   Card,
   CardAction,
@@ -40,6 +43,11 @@ import {
 import { Field, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { Spinner } from "@/components/ui/spinner";
 import {
   Table,
@@ -49,12 +57,45 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { initialActionState } from "@/lib/action-state";
 import { formatCurrency } from "@/lib/domain";
 import type { getReportsData } from "@/lib/queries";
 
 type ReportsData = Awaited<ReturnType<typeof getReportsData>>;
 type Report = ReportsData["reports"][number];
+
+const reportTabs = [
+  {
+    value: "draft",
+    label: "Borradores",
+    emptyTitle: "No hay borradores",
+    emptyDescription: "Los nuevos borradores aparecerán aquí.",
+  },
+  {
+    value: "rejected",
+    label: "Rechazados",
+    emptyTitle: "No hay reportes rechazados",
+    emptyDescription: "Los reportes rechazados aparecerán aquí junto con el motivo.",
+  },
+  {
+    value: "sent",
+    label: "Pendientes",
+    emptyTitle: "No hay reportes pendientes",
+    emptyDescription: "Los reportes enviados a revisión aparecerán aquí.",
+  },
+  {
+    value: "accepted",
+    label: "Aceptados",
+    emptyTitle: "No hay reportes aceptados",
+    emptyDescription: "Los reportes aprobados aparecerán aquí con sus saldos.",
+  },
+] as const satisfies ReadonlyArray<{
+  value: Report["status"];
+  label: string;
+  emptyTitle: string;
+  emptyDescription: string;
+}>;
 
 export function ReportsWorkspace({ data, today }: { data: ReportsData; today: string }) {
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -63,9 +104,6 @@ export function ReportsWorkspace({ data, today }: { data: ReportsData; today: st
   const editableReports = data.reports.filter(isEditable);
   const editableIdSet = new Set(editableReports.map((report) => report.id));
   const currentSelectedIds = selectedIds.filter((id) => editableIdSet.has(id));
-  const allEditableSelected =
-    editableReports.length > 0 && currentSelectedIds.length === editableReports.length;
-  const someEditableSelected = currentSelectedIds.length > 0 && !allEditableSelected;
   const pendingCount = data.reports.filter((report) => report.status === "sent").length;
 
   function toggleReport(reportId: string, checked: boolean) {
@@ -78,8 +116,13 @@ export function ReportsWorkspace({ data, today }: { data: ReportsData; today: st
     );
   }
 
-  function toggleAllEditable(checked: boolean) {
-    setSelectedIds(checked ? editableReports.map((report) => report.id) : []);
+  function toggleReports(reportIds: string[], checked: boolean) {
+    const reportIdSet = new Set(reportIds);
+    setSelectedIds((current) =>
+      checked
+        ? [...new Set([...current, ...reportIds])]
+        : current.filter((id) => !reportIdSet.has(id)),
+    );
   }
 
   function startEditing(reportId: string) {
@@ -106,7 +149,11 @@ export function ReportsWorkspace({ data, today }: { data: ReportsData; today: st
             Guarda avances como borrador y envía varios reportes cuando estén listos para revisión.
           </p>
         </div>
-        <div className="flex flex-wrap gap-2" aria-label="Resumen de reportes">
+        <div
+          className="flex flex-wrap gap-2"
+          role="group"
+          aria-label="Resumen de reportes"
+        >
           <Badge variant="outline">{editableReports.length} editables</Badge>
           <Badge variant="secondary">{pendingCount} pendientes</Badge>
           <Badge variant="outline">{data.reports.length} recientes</Badge>
@@ -125,10 +172,8 @@ export function ReportsWorkspace({ data, today }: { data: ReportsData; today: st
         <ReportLedger
           reports={data.reports}
           selectedIds={currentSelectedIds}
-          allEditableSelected={allEditableSelected}
-          someEditableSelected={someEditableSelected}
           onToggle={toggleReport}
-          onToggleAll={toggleAllEditable}
+          onToggleAll={toggleReports}
           onEdit={startEditing}
         />
       </div>
@@ -219,16 +264,13 @@ function ReportEditor({
 
             <Field data-invalid={dateError ? true : undefined}>
               <FieldLabel htmlFor="report-date">Fecha</FieldLabel>
-              <Input
+              <ReportDatePicker
                 id="report-date"
-                name="date"
-                type="date"
                 defaultValue={report?.date ?? today}
-                max={today}
-                required
+                maxValue={today}
                 disabled={isPending}
-                aria-invalid={dateError ? true : undefined}
-                aria-describedby={dateError ? "report-date-error" : undefined}
+                invalid={Boolean(dateError)}
+                describedBy={dateError ? "report-date-error" : undefined}
               />
               <FieldError id="report-date-error">{dateError}</FieldError>
             </Field>
@@ -273,21 +315,110 @@ function ReportEditor({
   );
 }
 
+function ReportDatePicker({
+  id,
+  defaultValue,
+  maxValue,
+  disabled,
+  invalid,
+  describedBy,
+}: {
+  id: string;
+  defaultValue: string;
+  maxValue: string;
+  disabled: boolean;
+  invalid: boolean;
+  describedBy?: string;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [open, setOpen] = useState(false);
+  const [value, setValue] = useState(defaultValue);
+  const selectedDate = parseLocalDate(value);
+
+  useEffect(() => {
+    const form = inputRef.current?.form;
+
+    if (!form) {
+      return;
+    }
+
+    function handleReset() {
+      setValue(defaultValue);
+      setOpen(false);
+    }
+
+    form.addEventListener("reset", handleReset);
+    return () => form.removeEventListener("reset", handleReset);
+  }, [defaultValue]);
+
+  function handleSelect(date: Date | undefined) {
+    if (!date) {
+      return;
+    }
+
+    setValue(formatLocalDate(date));
+    setOpen(false);
+  }
+
+  return (
+    <>
+      <input ref={inputRef} type="hidden" name="date" value={value} />
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger
+          render={
+            <Button
+              id={id}
+              type="button"
+              variant="outline"
+              className="w-full justify-start px-2.5 font-normal"
+              disabled={disabled}
+              aria-invalid={invalid || undefined}
+              aria-describedby={describedBy}
+            />
+          }
+        >
+          <CalendarIcon data-icon="inline-start" aria-hidden="true" />
+          {formatReportDate(value)}
+        </PopoverTrigger>
+        <PopoverContent className="w-auto p-0" align="start">
+          <Calendar
+            mode="single"
+            required
+            locale={es}
+            defaultMonth={selectedDate}
+            selected={selectedDate}
+            onSelect={handleSelect}
+            disabled={{ after: parseLocalDate(maxValue) }}
+          />
+        </PopoverContent>
+      </Popover>
+    </>
+  );
+}
+
+function parseLocalDate(value: string) {
+  const [year, month, day] = value.split("-").map(Number);
+  return new Date(year, month - 1, day);
+}
+
+function formatLocalDate(value: Date) {
+  const year = String(value.getFullYear()).padStart(4, "0");
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 function ReportLedger({
   reports,
   selectedIds,
-  allEditableSelected,
-  someEditableSelected,
   onToggle,
   onToggleAll,
   onEdit,
 }: {
   reports: ReportsData["reports"];
   selectedIds: string[];
-  allEditableSelected: boolean;
-  someEditableSelected: boolean;
   onToggle: (reportId: string, checked: boolean) => void;
-  onToggleAll: (checked: boolean) => void;
+  onToggleAll: (reportIds: string[], checked: boolean) => void;
   onEdit: (reportId: string) => void;
 }) {
   const [deleteState, deleteFormAction, deletePending] = useActionState(
@@ -295,14 +426,13 @@ function ReportLedger({
     initialActionState,
   );
   const selectedSet = new Set(selectedIds);
-  const editableCount = reports.filter(isEditable).length;
 
   return (
     <Card className="min-w-0">
       <CardHeader>
         <CardTitle>Historial reciente</CardTitle>
         <CardDescription>
-          Selecciona borradores o rechazados para enviarlos juntos a revisión.
+          Consulta cada estado y selecciona borradores o rechazados para enviarlos juntos.
         </CardDescription>
         <CardAction>
           <Badge variant="outline">Últimos {reports.length}</Badge>
@@ -310,130 +440,201 @@ function ReportLedger({
       </CardHeader>
 
       <CardContent className="flex min-w-0 flex-col gap-4">
-        {editableCount > 0 ? (
-          <label className="flex min-h-10 items-center gap-3 rounded-lg bg-muted/50 px-3 py-2 text-sm font-medium">
-            <Checkbox
-              checked={allEditableSelected}
-              indeterminate={someEditableSelected}
-              onCheckedChange={onToggleAll}
-              aria-label="Seleccionar todos los reportes editables"
-            />
-            <span>Seleccionar editables</span>
-            <span className="ml-auto text-xs font-normal text-muted-foreground">
-              {selectedIds.length} de {editableCount}
-            </span>
-          </label>
-        ) : null}
-
         <ActionFeedback state={deleteState} />
         <form id="delete-report-form" action={deleteFormAction} />
 
-        {reports.length === 0 ? (
-          <Empty className="border">
-            <EmptyHeader>
-              <EmptyMedia variant="icon">
-                <FilesIcon aria-hidden="true" />
-              </EmptyMedia>
-              <EmptyTitle>Aún no hay reportes</EmptyTitle>
-              <EmptyDescription>
-                El primer borrador que guardes aparecerá aquí.
-              </EmptyDescription>
-            </EmptyHeader>
-          </Empty>
-        ) : (
-          <>
-            <div className="hidden md:block">
-              <Table className="min-w-225">
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="w-10">
-                      <span className="sr-only">Seleccionar</span>
-                    </TableHead>
-                    <TableHead>Fecha</TableHead>
-                    <TableHead>Sitio</TableHead>
-                    <TableHead className="text-right">Importe</TableHead>
-                    <TableHead>Estado</TableHead>
-                    <TableHead>Detalle</TableHead>
-                    <TableHead className="text-right">Acciones</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {reports.map((report) => (
-                    <TableRow key={report.id} data-state={selectedSet.has(report.id) ? "selected" : undefined}>
-                      <TableCell>
-                        {isEditable(report) ? (
-                          <Checkbox
-                            checked={selectedSet.has(report.id)}
-                            onCheckedChange={(checked) => onToggle(report.id, checked)}
-                            aria-label={`Seleccionar reporte de ${report.websiteName} del ${formatReportDate(report.date)}`}
-                          />
-                        ) : null}
-                      </TableCell>
-                      <TableCell className="font-medium">{formatReportDate(report.date)}</TableCell>
-                      <TableCell>{report.websiteName}</TableCell>
-                      <TableCell className="text-right font-medium tabular-nums">
-                        {formatCurrency(report.amount)}
-                      </TableCell>
-                      <TableCell>
-                        <ReportStatusBadge status={report.status} />
-                      </TableCell>
-                      <TableCell className="max-w-64 whitespace-normal text-muted-foreground">
-                        <ReportDetail report={report} />
-                      </TableCell>
-                      <TableCell>
-                        {isEditable(report) ? (
-                          <div className="flex justify-end gap-1.5">
-                            <Button type="button" size="sm" variant="outline" onClick={() => onEdit(report.id)}>
-                              <PencilIcon data-icon="inline-start" />
-                              Editar
-                            </Button>
-                            <Button
-                              type="submit"
-                              size="sm"
-                              variant="destructive"
-                              form="delete-report-form"
-                              name="reportId"
-                              value={report.id}
-                              disabled={deletePending}
-                            >
-                              {deletePending ? (
-                                <Spinner data-icon="inline-start" />
-                              ) : (
-                                <Trash2Icon data-icon="inline-start" />
-                              )}
-                              Eliminar
-                            </Button>
-                          </div>
-                        ) : (
-                          <span className="block text-right text-muted-foreground">—</span>
-                        )}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-
-            <div className="flex flex-col gap-3 md:hidden">
-              {reports.map((report) => (
-                <ReportMobileCard
-                  key={report.id}
-                  report={report}
-                  selected={selectedSet.has(report.id)}
-                  deletePending={deletePending}
-                  onToggle={onToggle}
-                  onEdit={onEdit}
-                />
+        <Tabs defaultValue="draft" className="min-w-0">
+          <div className="overflow-x-auto pb-1">
+            <TabsList variant="line" className="min-w-max">
+              {reportTabs.map((tab) => (
+                <TabsTrigger key={tab.value} value={tab.value}>
+                  {tab.label}
+                  <Badge variant="secondary">
+                    {reports.filter((report) => report.status === tab.value).length}
+                  </Badge>
+                </TabsTrigger>
               ))}
-            </div>
-          </>
-        )}
+            </TabsList>
+          </div>
+
+          {reportTabs.map((tab) => (
+            <TabsContent key={tab.value} value={tab.value}>
+              <ReportStatusPanel
+                reports={reports.filter((report) => report.status === tab.value)}
+                selectedSet={selectedSet}
+                deletePending={deletePending}
+                emptyTitle={tab.emptyTitle}
+                emptyDescription={tab.emptyDescription}
+                selectionLabel={tab.label.toLowerCase()}
+                showDetail={tab.value === "rejected"}
+                onToggle={onToggle}
+                onToggleAll={onToggleAll}
+                onEdit={onEdit}
+              />
+            </TabsContent>
+          ))}
+        </Tabs>
       </CardContent>
 
       <CardFooter className="flex-col items-stretch gap-3">
         <SubmitReportsForm reportIds={selectedIds} />
       </CardFooter>
     </Card>
+  );
+}
+
+function ReportStatusPanel({
+  reports,
+  selectedSet,
+  deletePending,
+  emptyTitle,
+  emptyDescription,
+  selectionLabel,
+  showDetail,
+  onToggle,
+  onToggleAll,
+  onEdit,
+}: {
+  reports: Report[];
+  selectedSet: ReadonlySet<string>;
+  deletePending: boolean;
+  emptyTitle: string;
+  emptyDescription: string;
+  selectionLabel: string;
+  showDetail: boolean;
+  onToggle: (reportId: string, checked: boolean) => void;
+  onToggleAll: (reportIds: string[], checked: boolean) => void;
+  onEdit: (reportId: string) => void;
+}) {
+  const editableIds = reports.filter(isEditable).map((report) => report.id);
+  const selectedCount = editableIds.filter((id) => selectedSet.has(id)).length;
+  const allSelected = editableIds.length > 0 && selectedCount === editableIds.length;
+  const someSelected = selectedCount > 0 && !allSelected;
+
+  if (reports.length === 0) {
+    return (
+      <Empty className="border">
+        <EmptyHeader>
+          <EmptyMedia variant="icon">
+            <FilesIcon aria-hidden="true" />
+          </EmptyMedia>
+          <EmptyTitle>{emptyTitle}</EmptyTitle>
+          <EmptyDescription>{emptyDescription}</EmptyDescription>
+        </EmptyHeader>
+      </Empty>
+    );
+  }
+
+  return (
+    <div className="flex min-w-0 flex-col gap-4">
+      {editableIds.length > 0 ? (
+        <label className="flex min-h-10 items-center gap-3 rounded-lg bg-muted/50 px-3 py-2 text-sm font-medium">
+          <Checkbox
+            checked={allSelected}
+            indeterminate={someSelected}
+            onCheckedChange={(checked) => onToggleAll(editableIds, checked)}
+            aria-label={`Seleccionar todos los ${selectionLabel}`}
+          />
+          <span>Seleccionar {selectionLabel}</span>
+          <span className="ml-auto text-xs font-normal text-muted-foreground">
+            {selectedCount} de {editableIds.length}
+          </span>
+        </label>
+      ) : null}
+
+      <div className="hidden md:block">
+        <Table className="min-w-225">
+          <TableHeader>
+            <TableRow>
+              <TableHead className="w-10">
+                <span className="sr-only">Seleccionar</span>
+              </TableHead>
+              <TableHead>Fecha</TableHead>
+              <TableHead>Sitio</TableHead>
+              <TableHead className="text-right">Importe</TableHead>
+              {showDetail ? <TableHead>Detalle</TableHead> : null}
+              <TableHead className="text-right">Acciones</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {reports.map((report) => (
+              <TableRow
+                key={report.id}
+                data-state={selectedSet.has(report.id) ? "selected" : undefined}
+              >
+                <TableCell>
+                  {isEditable(report) ? (
+                    <Checkbox
+                      checked={selectedSet.has(report.id)}
+                      onCheckedChange={(checked) => onToggle(report.id, checked)}
+                      aria-label={`Seleccionar reporte de ${report.websiteName} del ${formatReportDate(report.date)}`}
+                    />
+                  ) : null}
+                </TableCell>
+                <TableCell className="font-medium">
+                  {formatReportDate(report.date)}
+                </TableCell>
+                <TableCell>{report.websiteName}</TableCell>
+                <TableCell className="text-right font-medium tabular-nums">
+                  {formatCurrency(report.amount)}
+                </TableCell>
+                {showDetail ? (
+                  <TableCell className="max-w-64 whitespace-normal text-muted-foreground">
+                    <ReportDetail report={report} />
+                  </TableCell>
+                ) : null}
+                <TableCell>
+                  {isEditable(report) ? (
+                    <div className="flex justify-end gap-1.5">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={() => onEdit(report.id)}
+                      >
+                        <PencilIcon data-icon="inline-start" />
+                        Editar
+                      </Button>
+                      <Button
+                        type="submit"
+                        size="sm"
+                        variant="destructive"
+                        form="delete-report-form"
+                        name="reportId"
+                        value={report.id}
+                        disabled={deletePending}
+                      >
+                        {deletePending ? (
+                          <Spinner data-icon="inline-start" />
+                        ) : (
+                          <Trash2Icon data-icon="inline-start" />
+                        )}
+                        Eliminar
+                      </Button>
+                    </div>
+                  ) : (
+                    <span className="block text-right text-muted-foreground">—</span>
+                  )}
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
+
+      <div className="flex flex-col gap-3 md:hidden">
+        {reports.map((report) => (
+          <ReportMobileCard
+            key={report.id}
+            report={report}
+            selected={selectedSet.has(report.id)}
+            deletePending={deletePending}
+            onToggle={onToggle}
+            onEdit={onEdit}
+          />
+        ))}
+      </div>
+    </div>
   );
 }
 
