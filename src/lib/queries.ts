@@ -7,7 +7,7 @@ import {
   getTodayDate,
   parseDateOnly,
 } from "@/lib/domain";
-import { getReportScope } from "@/lib/report-scope";
+import { getReportEventScope, getReportScope } from "@/lib/report-scope";
 
 export async function getDashboardData(user: CurrentUser) {
   const today = getTodayDate();
@@ -70,21 +70,38 @@ export async function getDashboardData(user: CurrentUser) {
 
 export async function getReportsData(user: CurrentUser) {
   const teamId = user.teamId ?? "__unassigned__";
-  const [siteAccounts, reports] = await Promise.all([
+  const reportWhere =
+    user.role === "leader" ? { teamId } : { userId: user.id };
+  const [siteAccounts, reports, members] = await Promise.all([
     db.siteAccount.findMany({
       where: { teamId, website: { active: true } },
       orderBy: { website: { name: "asc" } },
       include: { website: { select: { id: true, name: true } } },
     }),
     db.report.findMany({
-      where: { userId: user.id },
+      where: {
+        ...reportWhere,
+        status: { in: ["draft", "sent", "rejected"] },
+      },
       orderBy: [{ date: "desc" }, { createdAt: "desc" }],
       take: 100,
-      include: { website: { select: { name: true } } },
+      include: {
+        user: { select: { name: true } },
+        createdBy: { select: { id: true, name: true } },
+        website: { select: { name: true } },
+      },
     }),
+    user.role === "leader"
+      ? db.user.findMany({
+          where: { teamId },
+          orderBy: [{ name: "asc" }, { id: "asc" }],
+          select: { id: true, name: true },
+        })
+      : Promise.resolve([]),
   ]);
 
   return {
+    members,
     websites: siteAccounts.map((account) => ({
       id: account.website.id,
       name: account.website.name,
@@ -92,41 +109,99 @@ export async function getReportsData(user: CurrentUser) {
     })),
     reports: reports.map((report) => ({
       id: report.id,
+      userId: report.userId,
+      userName: report.user.name,
       websiteId: report.websiteId,
       websiteName: report.website.name,
       date: formatDateOnly(report.date),
       amount: Number(report.amount),
+      breakdown: Array.from(report.breakdown, (entry) =>
+        Number(Number(entry).toFixed(2)),
+      ),
       startAmount: report.startAmount === null ? null : Number(report.startAmount),
       endAmount: report.endAmount === null ? null : Number(report.endAmount),
       status: report.status,
+      submissionOrigin: report.submissionOrigin,
+      createdBy:
+        report.createdById === report.userId ? null : report.createdBy,
       rejectionNote: report.rejectionNote,
     })),
   };
 }
 
+const REPORT_HISTORY_PAGE_SIZE = 50;
+
+export async function getReportHistoryData(
+  user: CurrentUser,
+  requestedPage = 1,
+) {
+  const where = getReportEventScope(user);
+  const requestedValidPage = Number.isSafeInteger(requestedPage) && requestedPage > 0
+    ? requestedPage
+    : 1;
+  const total = await db.reportEvent.count({ where });
+  const pageCount = Math.max(
+    1,
+    Math.ceil(total / REPORT_HISTORY_PAGE_SIZE),
+  );
+  const page = Math.min(requestedValidPage, pageCount);
+  const events = await db.reportEvent.findMany({
+    where,
+    orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
+    skip: (page - 1) * REPORT_HISTORY_PAGE_SIZE,
+    take: REPORT_HISTORY_PAGE_SIZE,
+  });
+
+  return {
+    events: events.map((event) => ({
+      id: event.id,
+      reportId: event.reportId,
+      relatedReportId: event.relatedReportId,
+      type: event.type,
+      cycle: event.cycle,
+      occurredAt: event.occurredAt.toISOString(),
+      actorName: event.actorName,
+      actorRole: event.actorRole,
+      ownerId: event.ownerId,
+      ownerName: event.ownerName,
+      creatorId: event.creatorId,
+      creatorName: event.creatorName,
+      teamName: event.teamName,
+      websiteName: event.websiteName,
+      reportDate: formatDateOnly(event.reportDate),
+      amount: Number(event.amount),
+      breakdown: Array.from(event.breakdown, (entry) =>
+        Number(Number(entry).toFixed(2)),
+      ),
+      status: event.status,
+      submissionOrigin: event.submissionOrigin,
+      rejectionNote: event.rejectionNote,
+      startAmount:
+        event.startAmount === null ? null : Number(event.startAmount),
+      endAmount: event.endAmount === null ? null : Number(event.endAmount),
+      backfilled: event.backfilled,
+    })),
+    pagination: {
+      page,
+      pageSize: REPORT_HISTORY_PAGE_SIZE,
+      total,
+      pageCount,
+    },
+  };
+}
+
 export async function getApprovalsData(user: CurrentUser) {
   const teamId = user.teamId ?? "__unassigned__";
-  const [pendingReports, recentlyReviewed] = await Promise.all([
-    db.report.findMany({
-      where: { teamId, status: "sent" },
-      orderBy: [{ date: "asc" }, { createdAt: "asc" }],
-      include: {
-        user: { select: { name: true } },
-        website: { select: { name: true } },
-      },
-    }),
-    db.report.findMany({
-      where: { teamId, status: { in: ["accepted", "rejected"] } },
-      orderBy: { reviewedAt: "desc" },
-      take: 12,
-      include: {
-        user: { select: { name: true } },
-        website: { select: { name: true } },
-      },
-    }),
-  ]);
+  const pendingReports = await db.report.findMany({
+    where: { teamId, status: "sent" },
+    orderBy: [{ date: "asc" }, { createdAt: "asc" }],
+    include: {
+      user: { select: { name: true } },
+      website: { select: { name: true } },
+    },
+  });
 
-  const serialize = (report: (typeof pendingReports)[number] | (typeof recentlyReviewed)[number]) => ({
+  const serialize = (report: (typeof pendingReports)[number]) => ({
     id: report.id,
     date: formatDateOnly(report.date),
     amount: Number(report.amount),
@@ -140,7 +215,6 @@ export async function getApprovalsData(user: CurrentUser) {
 
   return {
     pendingReports: pendingReports.map(serialize),
-    recentlyReviewed: recentlyReviewed.map(serialize),
   };
 }
 

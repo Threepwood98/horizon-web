@@ -49,6 +49,14 @@ const dateFormatter = new Intl.DateTimeFormat("es-ES", {
   timeZone: "UTC",
 });
 
+const longDateFormatter = new Intl.DateTimeFormat("es-ES", {
+  weekday: "long",
+  day: "numeric",
+  month: "long",
+  year: "numeric",
+  timeZone: "UTC",
+});
+
 export function ReportStatusBadge({ status }: { status: ReportStatus }) {
   const details = statusDetails[status];
   const Icon = details.icon;
@@ -86,4 +94,9 @@ export function ActionFeedback({ state }: { state: ActionState }) {
 export function formatReportDate(value: string) {
   const [year, month, day] = value.split("-").map(Number);
   return dateFormatter.format(new Date(Date.UTC(year, month - 1, day)));
+}
+
+export function formatLongReportDate(value: string) {
+  const [year, month, day] = value.split("-").map(Number);
+  return longDateFormatter.format(new Date(Date.UTC(year, month - 1, day)));
 }

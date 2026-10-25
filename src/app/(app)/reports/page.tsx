@@ -19,6 +19,14 @@ export default async function ReportsPage() {
   }
 
   const data = await getReportsData(user);
+  const today = getTodayDate();
 
-  return <ReportsWorkspace data={data} today={getTodayDate()} />;
+  return (
+    <ReportsWorkspace
+      data={data}
+      today={today}
+      currentUserId={user.id}
+      isLeader={user.role === "leader"}
+    />
+  );
 }

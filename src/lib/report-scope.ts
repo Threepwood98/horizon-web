@@ -12,3 +12,17 @@ export function getReportScope(user: CurrentUser): Prisma.ReportWhereInput {
 
   return { userId: user.id };
 }
+
+export function getReportEventScope(
+  user: CurrentUser,
+): Prisma.ReportEventWhereInput {
+  if (user.role === "admin" || user.role === "manager") {
+    return {};
+  }
+
+  if (user.role === "leader") {
+    return { teamId: user.teamId ?? "__unassigned__" };
+  }
+
+  return { ownerId: "__forbidden__" };
+}

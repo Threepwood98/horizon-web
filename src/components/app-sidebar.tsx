@@ -8,6 +8,7 @@ import {
   ChartNoAxesCombinedIcon,
   ClipboardCheckIcon,
   FileTextIcon,
+  HistoryIcon,
   LandmarkIcon,
   LayoutDashboardIcon,
   ShieldCheckIcon,
@@ -47,6 +48,12 @@ const navigation: readonly NavigationItem[] = [
     href: "/reports",
     icon: FileTextIcon,
     roles: ["user", "leader"],
+  },
+  {
+    title: "Historial",
+    href: "/history",
+    icon: HistoryIcon,
+    roles: ["leader", "manager", "admin"],
   },
   {
     title: "Aprobaciones",

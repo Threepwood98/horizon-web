@@ -13,7 +13,24 @@ import {
 } from "@/lib/action-state";
 import { requireCurrentUser } from "@/lib/current-user";
 import { db } from "@/lib/db";
-import { DomainError, getTodayDate, parseDateOnly } from "@/lib/domain";
+import {
+  DomainError,
+  formatDateOnly,
+  getTodayDate,
+  parseDateOnly,
+} from "@/lib/domain";
+import {
+  buildReportDraftKey,
+  MAXIMUM_REPORT_AMOUNT,
+  sumReportAmounts,
+} from "@/lib/report-breakdown";
+import { assertReportDateAllowed } from "@/lib/report-date-policy";
+import {
+  buildReportEvent,
+  getSubmissionEventType,
+  reportEventSnapshotSelect,
+} from "@/lib/report-events";
+import { getReportScope } from "@/lib/report-scope";
 import { withSerializableTransaction } from "@/lib/transaction";
 
 const amountSchema = z
@@ -21,13 +38,20 @@ const amountSchema = z
   .regex(/^\d{1,10}(?:\.\d{1,2})?$/, "Introduce un importe válido con hasta dos decimales.")
   .refine((value) => new Prisma.Decimal(value).greaterThan(0), "El importe debe ser mayor que cero.");
 
-const reportSchema = z.object({
+const reportDetailsSchema = z.object({
   reportId: z.string().optional(),
+  ownerId: z.string().optional(),
   websiteId: z.string().min(1, "Selecciona un sitio."),
-  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Selecciona una fecha válida."),
-  amount: amountSchema,
+  date: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, "Selecciona una fecha válida.")
+    .optional(),
 });
 
+const breakdownSchema = z
+  .array(amountSchema)
+  .min(1, "El borrador debe conservar al menos una entrada.")
+  .max(100, "El desglose no puede superar las 100 entradas.");
 const selectionSchema = z.array(z.string().min(1)).min(1).max(100);
 
 export async function saveReportAction(
@@ -36,11 +60,17 @@ export async function saveReportAction(
 ): Promise<ActionState> {
   try {
     const user = await requireCurrentUser(["user", "leader"]);
-    const parsed = reportSchema.safeParse({
+    const parsed = reportDetailsSchema.safeParse({
       reportId: getFormString(formData, "reportId") || undefined,
+      ownerId:
+        user.role === "leader"
+          ? getFormString(formData, "ownerId") || undefined
+          : undefined,
       websiteId: getFormString(formData, "websiteId"),
-      date: getFormString(formData, "date"),
-      amount: getFormString(formData, "amount"),
+      date:
+        user.role === "leader"
+          ? getFormString(formData, "date") || undefined
+          : undefined,
     });
 
     if (!parsed.success) {
@@ -55,67 +85,315 @@ export async function saveReportAction(
       throw new DomainError("Debes pertenecer a un equipo para registrar ganancias.");
     }
 
-    const reportDate = parseDateOnly(parsed.data.date);
-    if (parsed.data.date > getTodayDate()) {
-      throw new DomainError("No puedes registrar ganancias en una fecha futura.");
+    const editableReport = parsed.data.reportId
+      ? await db.report.findFirst({
+          where: {
+            id: parsed.data.reportId,
+            ...getReportScope(user),
+            status: { in: ["draft", "rejected"] },
+          },
+          select: {
+            status: true,
+            date: true,
+            userId: true,
+            createdById: true,
+          },
+        })
+      : null;
+
+    if (parsed.data.reportId && !editableReport) {
+      throw new DomainError("Este reporte ya no se puede editar.");
     }
 
-    const siteAccount = await db.siteAccount.findUnique({
-      where: {
-        teamId_websiteId: {
-          teamId: user.teamId,
-          websiteId: parsed.data.websiteId,
+    if (
+      editableReport &&
+      parsed.data.ownerId &&
+      parsed.data.ownerId !== editableReport.userId
+    ) {
+      throw new DomainError("No puedes cambiar el miembro de un reporte existente.");
+    }
+
+    const ownerId = editableReport?.userId ??
+      (user.role === "leader" ? parsed.data.ownerId : user.id);
+    if (!ownerId) {
+      return {
+        status: "error",
+        message: "Revisa los datos del reporte.",
+        fieldErrors: { ownerId: ["Selecciona un miembro del equipo."] },
+      };
+    }
+
+    const breakdownResult = editableReport?.status === "draft"
+      ? breakdownSchema.safeParse(getRawFormStrings(formData, "entryAmounts"))
+      : amountSchema.safeParse(getFormString(formData, "amount"));
+
+    if (!breakdownResult.success) {
+      return {
+        status: "error",
+        message: "Revisa los datos del reporte.",
+        fieldErrors: {
+          [editableReport?.status === "draft" ? "entryAmounts" : "amount"]:
+            breakdownResult.error.issues.map((issue) => issue.message),
         },
-      },
-      include: { website: { select: { active: true } } },
+      };
+    }
+
+    const entryAmounts = Array.isArray(breakdownResult.data)
+      ? breakdownResult.data
+      : [breakdownResult.data];
+    const totalAmount = sumReportAmounts(entryAmounts);
+    if (totalAmount.greaterThan(MAXIMUM_REPORT_AMOUNT)) {
+      return {
+        status: "error",
+        message: "Revisa los datos del reporte.",
+        fieldErrors: {
+          [editableReport?.status === "draft" ? "entryAmounts" : "amount"]: [
+            "El importe total no puede superar 9,999,999,999.99 USD.",
+          ],
+        },
+      };
+    }
+
+    const today = getTodayDate();
+    const requestedDate =
+      user.role === "user"
+        ? editableReport
+          ? formatDateOnly(editableReport.date)
+          : today
+        : parsed.data.date;
+    if (!requestedDate) {
+      return {
+        status: "error",
+        message: "Revisa los datos del reporte.",
+        fieldErrors: { date: ["Selecciona una fecha válida."] },
+      };
+    }
+
+    const reportDate = parseDateOnly(requestedDate);
+    assertReportDateAllowed({
+      role: user.role,
+      requestedDate,
+      today,
+      originalDate: editableReport
+        ? formatDateOnly(editableReport.date)
+        : undefined,
     });
 
-    if (!siteAccount || !siteAccount.website.active) {
-      throw new DomainError("El sitio no está habilitado para tu equipo.");
-    }
+    const creatorId = editableReport?.createdById ?? user.id;
+    const draftKey = buildReportDraftKey(
+      ownerId,
+      creatorId,
+      user.teamId,
+      parsed.data.websiteId,
+      requestedDate,
+    );
+    const mergedExistingDraft = await withSerializableTransaction(
+      async (transaction) => {
+        const owner = await transaction.user.findFirst({
+          where: { id: ownerId, teamId: user.teamId! },
+          select: { id: true },
+        });
+        const siteAccount = await transaction.siteAccount.findUnique({
+          where: {
+            teamId_websiteId: {
+              teamId: user.teamId!,
+              websiteId: parsed.data.websiteId,
+            },
+          },
+          include: { website: { select: { active: true } } },
+        });
 
-    if (parsed.data.reportId) {
-      const report = await db.report.findFirst({
-        where: {
-          id: parsed.data.reportId,
-          userId: user.id,
-          status: { in: ["draft", "rejected"] },
-        },
-        select: { id: true },
-      });
+        if (!owner) {
+          throw new DomainError(
+            "El miembro seleccionado no pertenece a tu equipo.",
+          );
+        }
 
-      if (!report) {
-        throw new DomainError("Este reporte ya no se puede editar.");
-      }
+        if (!siteAccount || !siteAccount.website.active) {
+          throw new DomainError("El sitio no está habilitado para tu equipo.");
+        }
 
-      await db.report.update({
-        where: { id: report.id },
-        data: {
-          teamId: user.teamId,
-          websiteId: parsed.data.websiteId,
-          date: reportDate,
-          amount: parsed.data.amount,
-          status: "draft",
-          rejectionNote: null,
-          reviewedAt: null,
-          reviewedById: null,
-          sentAt: null,
-        },
-      });
-    } else {
-      await db.report.create({
-        data: {
-          userId: user.id,
-          teamId: user.teamId,
-          websiteId: parsed.data.websiteId,
-          date: reportDate,
-          amount: parsed.data.amount,
-        },
-      });
-    }
+        if (parsed.data.reportId) {
+          const report = await transaction.report.findFirst({
+            where: {
+              id: parsed.data.reportId,
+              ...getReportScope(user),
+              status: { in: ["draft", "rejected"] },
+            },
+            select: {
+              ...reportEventSnapshotSelect,
+              draftKey: true,
+            },
+          });
+
+          if (
+            !report ||
+            report.status !== editableReport?.status ||
+            report.userId !== ownerId ||
+            report.createdById !== creatorId
+          ) {
+            throw new DomainError(
+              "Este reporte cambió mientras lo editabas. Inténtalo de nuevo.",
+            );
+          }
+
+          assertReportDateAllowed({
+            role: user.role,
+            requestedDate,
+            today,
+            originalDate: formatDateOnly(report.date),
+          });
+
+          if (report.submissionCount > 0 || report.draftKey === draftKey) {
+            const savedReport = await transaction.report.update({
+              where: { id: report.id },
+              data: {
+                teamId: user.teamId!,
+                websiteId: parsed.data.websiteId,
+                date: reportDate,
+                amount: totalAmount,
+                breakdown: { set: entryAmounts },
+                draftKey: report.submissionCount > 0 ? null : draftKey,
+                status: "draft",
+                submissionOrigin: null,
+                rejectionNote: null,
+                reviewedAt: null,
+                reviewedById: null,
+                sentAt: null,
+                startAmount: null,
+                endAmount: null,
+              },
+              select: reportEventSnapshotSelect,
+            });
+            await transaction.reportEvent.create({
+              data: buildReportEvent(savedReport, {
+                type: "edited",
+                actor: user,
+              }),
+            });
+            return false;
+          }
+
+          const targetDraft = await transaction.report.findUnique({
+            where: { draftKey },
+            select: { id: true, amount: true },
+          });
+
+          if (!targetDraft) {
+            const savedReport = await transaction.report.update({
+              where: { id: report.id },
+              data: {
+                teamId: user.teamId!,
+                websiteId: parsed.data.websiteId,
+                date: reportDate,
+                amount: totalAmount,
+                breakdown: { set: entryAmounts },
+                draftKey,
+                status: "draft",
+                submissionOrigin: null,
+                rejectionNote: null,
+                reviewedAt: null,
+                reviewedById: null,
+                sentAt: null,
+                startAmount: null,
+                endAmount: null,
+              },
+              select: reportEventSnapshotSelect,
+            });
+            await transaction.reportEvent.create({
+              data: buildReportEvent(savedReport, {
+                type: "edited",
+                actor: user,
+              }),
+            });
+            return false;
+          }
+
+          assertAggregateFits(targetDraft.amount, totalAmount);
+          await transaction.reportEvent.create({
+            data: buildReportEvent(report, {
+              type: "merged",
+              actor: user,
+              relatedReportId: targetDraft.id,
+            }),
+          });
+          await transaction.report.delete({ where: { id: report.id } });
+          const savedReport = await transaction.report.update({
+            where: { id: targetDraft.id },
+            data: {
+              amount: { increment: totalAmount },
+              breakdown: { push: entryAmounts },
+              submissionOrigin: null,
+            },
+            select: reportEventSnapshotSelect,
+          });
+          await transaction.reportEvent.create({
+            data: buildReportEvent(savedReport, {
+              type: "entry_added",
+              actor: user,
+              relatedReportId: report.id,
+            }),
+          });
+          return true;
+        }
+
+        const targetDraft = await transaction.report.findUnique({
+          where: { draftKey },
+          select: { id: true, amount: true },
+        });
+        assertAggregateFits(targetDraft?.amount, totalAmount);
+
+        if (targetDraft) {
+          const savedReport = await transaction.report.update({
+            where: { id: targetDraft.id },
+            data: {
+              amount: { increment: totalAmount },
+              breakdown: { push: entryAmounts },
+              submissionOrigin: null,
+            },
+            select: reportEventSnapshotSelect,
+          });
+          await transaction.reportEvent.create({
+            data: buildReportEvent(savedReport, {
+              type: "entry_added",
+              actor: user,
+            }),
+          });
+          return true;
+        }
+
+        const savedReport = await transaction.report.create({
+          data: {
+            userId: ownerId,
+            createdById: creatorId,
+            teamId: user.teamId!,
+            websiteId: parsed.data.websiteId,
+            date: reportDate,
+            amount: totalAmount,
+            breakdown: entryAmounts,
+            draftKey,
+          },
+          select: reportEventSnapshotSelect,
+        });
+        await transaction.reportEvent.create({
+          data: buildReportEvent(savedReport, {
+            type: "created",
+            actor: user,
+          }),
+        });
+        return false;
+      },
+    );
 
     revalidateReportViews();
-    return actionSuccess(parsed.data.reportId ? "Reporte actualizado." : "Borrador guardado.");
+    if (parsed.data.reportId) {
+      return actionSuccess(
+        mergedExistingDraft ? "Borradores combinados." : "Borrador actualizado.",
+      );
+    }
+    return actionSuccess(
+      mergedExistingDraft ? "Entrada agregada al borrador existente." : "Borrador guardado.",
+    );
   } catch (error) {
     return actionFailure(error);
   }
@@ -129,17 +407,28 @@ export async function deleteReportAction(
     const user = await requireCurrentUser(["user", "leader"]);
     const reportId = getFormString(formData, "reportId");
 
-    const deleted = await db.report.deleteMany({
-      where: {
-        id: reportId,
-        userId: user.id,
-        status: { in: ["draft", "rejected"] },
-      },
-    });
+    await withSerializableTransaction(async (transaction) => {
+      const report = await transaction.report.findFirst({
+        where: {
+          id: reportId,
+          ...getReportScope(user),
+          status: { in: ["draft", "rejected"] },
+        },
+        select: reportEventSnapshotSelect,
+      });
 
-    if (deleted.count !== 1) {
-      throw new DomainError("Este reporte ya no se puede eliminar.");
-    }
+      if (!report) {
+        throw new DomainError("Este reporte ya no se puede eliminar.");
+      }
+
+      await transaction.reportEvent.create({
+        data: buildReportEvent(report, {
+          type: "deleted",
+          actor: user,
+        }),
+      });
+      await transaction.report.delete({ where: { id: report.id } });
+    });
 
     revalidateReportViews();
     return actionSuccess("Reporte eliminado.");
@@ -163,7 +452,7 @@ export async function submitReportsAction(
       const reports = await transaction.report.findMany({
         where: {
           id: { in: reportIds },
-          userId: user.id,
+          ...getReportScope(user),
           teamId: user.teamId!,
           status: { in: ["draft", "rejected"] },
         },
@@ -187,24 +476,48 @@ export async function submitReportsAction(
         throw new DomainError("Uno de los sitios seleccionados ya no está habilitado para tu equipo.");
       }
 
+      const submittedAt = new Date();
       const updated = await transaction.report.updateMany({
         where: {
           id: { in: reportIds },
-          userId: user.id,
+          ...getReportScope(user),
           teamId: user.teamId!,
           status: { in: ["draft", "rejected"] },
         },
         data: {
           status: "sent",
-          sentAt: new Date(),
+          draftKey: null,
+          sentAt: submittedAt,
+          submissionOrigin: "manual",
           rejectionNote: null,
           reviewedAt: null,
           reviewedById: null,
+          submissionCount: { increment: 1 },
         },
       });
 
       if (updated.count !== reportIds.length) {
         throw new DomainError("Alguno de los reportes seleccionados cambió mientras se enviaba.");
+      }
+
+      const submittedReports = await transaction.report.findMany({
+        where: { id: { in: reportIds }, status: "sent" },
+        select: reportEventSnapshotSelect,
+      });
+      if (submittedReports.length !== reportIds.length) {
+        throw new DomainError(
+          "No se pudo registrar el historial de todos los reportes enviados.",
+        );
+      }
+
+      for (const report of submittedReports) {
+        await transaction.reportEvent.create({
+          data: buildReportEvent(report, {
+            type: getSubmissionEventType(report.submissionCount),
+            actor: user,
+            occurredAt: submittedAt,
+          }),
+        });
       }
     });
 
@@ -235,6 +548,10 @@ export async function acceptReportsAction(
           status: "sent",
         },
         orderBy: [{ websiteId: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+        select: {
+          ...reportEventSnapshotSelect,
+          createdAt: true,
+        },
       });
 
       if (reports.length !== reportIds.length) {
@@ -242,23 +559,22 @@ export async function acceptReportsAction(
       }
 
       const reportsByWebsite = Map.groupBy(reports, (report) => report.websiteId);
+      const reviewedAt = new Date();
 
       for (const [websiteId, websiteReports] of reportsByWebsite) {
-        const [siteAccount, acceptedTotal] = await Promise.all([
-          transaction.siteAccount.findUnique({
-            where: {
-              teamId_websiteId: { teamId: reviewer.teamId!, websiteId },
-            },
-          }),
-          transaction.report.aggregate({
-            where: {
-              teamId: reviewer.teamId!,
-              websiteId,
-              status: "accepted",
-            },
-            _sum: { amount: true },
-          }),
-        ]);
+        const siteAccount = await transaction.siteAccount.findUnique({
+          where: {
+            teamId_websiteId: { teamId: reviewer.teamId!, websiteId },
+          },
+        });
+        const acceptedTotal = await transaction.report.aggregate({
+          where: {
+            teamId: reviewer.teamId!,
+            websiteId,
+            status: "accepted",
+          },
+          _sum: { amount: true },
+        });
 
         if (!siteAccount) {
           throw new DomainError("Falta la cuenta del sitio para uno de los reportes.");
@@ -268,7 +584,7 @@ export async function acceptReportsAction(
 
         for (const report of websiteReports) {
           const endAmount = balance.plus(report.amount);
-          await transaction.report.update({
+          const acceptedReport = await transaction.report.update({
             where: { id: report.id },
             data: {
               status: "accepted",
@@ -276,8 +592,16 @@ export async function acceptReportsAction(
               endAmount,
               rejectionNote: null,
               reviewedById: reviewer.id,
-              reviewedAt: new Date(),
+              reviewedAt,
             },
+            select: reportEventSnapshotSelect,
+          });
+          await transaction.reportEvent.create({
+            data: buildReportEvent(acceptedReport, {
+              type: "accepted",
+              actor: reviewer,
+              occurredAt: reviewedAt,
+            }),
           });
           balance = endAmount;
         }
@@ -322,17 +646,48 @@ export async function rejectReportsAction(
         throw new DomainError("Alguno de los reportes seleccionados ya fue procesado.");
       }
 
-      await transaction.report.updateMany({
-        where: { id: { in: reportIds } },
+      const reviewedAt = new Date();
+      const rejected = await transaction.report.updateMany({
+        where: {
+          id: { in: reportIds },
+          teamId: reviewer.teamId!,
+          status: "sent",
+        },
         data: {
           status: "rejected",
           rejectionNote,
           reviewedById: reviewer.id,
-          reviewedAt: new Date(),
+          reviewedAt,
           startAmount: null,
           endAmount: null,
         },
       });
+
+      if (rejected.count !== reportIds.length) {
+        throw new DomainError(
+          "Alguno de los reportes seleccionados cambió mientras se rechazaba.",
+        );
+      }
+
+      const rejectedReports = await transaction.report.findMany({
+        where: { id: { in: reportIds }, status: "rejected" },
+        select: reportEventSnapshotSelect,
+      });
+      if (rejectedReports.length !== reportIds.length) {
+        throw new DomainError(
+          "No se pudo registrar el historial de todos los reportes rechazados.",
+        );
+      }
+
+      for (const report of rejectedReports) {
+        await transaction.reportEvent.create({
+          data: buildReportEvent(report, {
+            type: "rejected",
+            actor: reviewer,
+            occurredAt: reviewedAt,
+          }),
+        });
+      }
     });
 
     revalidateReportViews();
@@ -352,9 +707,25 @@ function parseSelection(formData: FormData) {
   return result.data;
 }
 
+function getRawFormStrings(formData: FormData, key: string) {
+  return formData
+    .getAll(key)
+    .map((value) => (typeof value === "string" ? value.trim() : ""));
+}
+
+function assertAggregateFits(
+  currentAmount: Prisma.Decimal | null | undefined,
+  addedAmount: Prisma.Decimal,
+) {
+  if ((currentAmount ?? new Prisma.Decimal(0)).plus(addedAmount).greaterThan(MAXIMUM_REPORT_AMOUNT)) {
+    throw new DomainError("El importe total del borrador supera 9,999,999,999.99 USD.");
+  }
+}
+
 function revalidateReportViews() {
   revalidatePath("/dashboard");
   revalidatePath("/reports");
   revalidatePath("/approvals");
+  revalidatePath("/history");
   revalidatePath("/statistics");
 }

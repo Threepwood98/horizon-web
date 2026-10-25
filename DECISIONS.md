@@ -16,6 +16,12 @@
 - A single rejection note applies to all lines selected in one rejection action.
 - Websites with historical activity are deactivated instead of deleted.
 - Changing an opening balance shifts existing accepted start/end snapshots by the same delta so their balance chain remains valid.
+- Ordinary users never choose a report date: the server uses the current `America/Havana` civil day for new reports and preserves the stored date on edits.
+- Team leaders may create reports for members of their own team. The immutable creator participates in the draft aggregation key, so entries from the same leader aggregate together but never merge with entries created by the owner.
+- Report events are append-only snapshots without a cascading report foreign key. Creation, additions, edits, merges, submissions, reviews, and deletions therefore remain auditable even after the mutable report is deleted.
+- A corrected rejected report retains its original identity and submission counter, allowing every rejection and later review cycle to remain linked.
+- A short, idempotent Railway Cron command submits every `draft` older than the current business date. Rejected reports are intentionally excluded, and automatic submission creates its event atomically with the status change.
+- Report history is visible to leaders for their team and globally to managers and administrators; ordinary users cannot access it.
 
 ## UI
 

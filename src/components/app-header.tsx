@@ -28,6 +28,7 @@ import type { CurrentUser } from "@/lib/current-user";
 const routeTitles = [
   ["/dashboard", "Panel financiero"],
   ["/reports", "Informes"],
+  ["/history", "Historial"],
   ["/approvals", "Aprobaciones"],
   ["/statistics", "Estadísticas"],
   ["/administration", "Administración"],

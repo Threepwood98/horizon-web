@@ -14,6 +14,7 @@
     "lint": "eslint",
     "postinstall": "prisma generate",
     "prisma:generate": "prisma generate",
+    "reports:auto-submit": "tsx scripts/auto-submit-reports.ts",
     "start": "next start",
     "test": "tsx --test tests/**/*.test.ts",
     "typecheck": "tsc --noEmit"

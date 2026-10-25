@@ -2,15 +2,13 @@
 
 import { useActionState, useEffect, useRef, useState } from "react";
 import {
-  ArrowRightIcon,
   CheckCheckIcon,
-  ClipboardCheckIcon,
   InboxIcon,
   XIcon,
 } from "lucide-react";
 
 import { acceptReportsAction, rejectReportsAction } from "@/app/actions/reports";
-import { ActionFeedback, formatReportDate, ReportStatusBadge } from "@/components/reports/report-ui";
+import { ActionFeedback, formatReportDate } from "@/components/reports/report-ui";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -47,7 +45,6 @@ import type { getApprovalsData } from "@/lib/queries";
 
 type ApprovalsData = Awaited<ReturnType<typeof getApprovalsData>>;
 type PendingReport = ApprovalsData["pendingReports"][number];
-type ReviewedReport = ApprovalsData["recentlyReviewed"][number];
 
 export function ApprovalsWorkspace({ data }: { data: ApprovalsData }) {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -106,8 +103,6 @@ export function ApprovalsWorkspace({ data }: { data: ApprovalsData }) {
         <AcceptReportsCard reportIds={currentSelectedIds} />
         <RejectReportsCard reportIds={currentSelectedIds} />
       </div>
-
-      <ReviewedReportsCard reports={data.recentlyReviewed} />
     </section>
   );
 }
@@ -316,86 +311,6 @@ function RejectReportsCard({ reportIds }: { reportIds: string[] }) {
   );
 }
 
-function ReviewedReportsCard({ reports }: { reports: ApprovalsData["recentlyReviewed"] }) {
-  return (
-    <Card className="min-w-0">
-      <CardHeader>
-        <CardTitle>Revisados recientemente</CardTitle>
-        <CardDescription>
-          Los reportes aceptados conservan el saldo inicial y final aplicado en la revisión.
-        </CardDescription>
-        <CardAction>
-          <Badge variant="outline">Últimos {reports.length}</Badge>
-        </CardAction>
-      </CardHeader>
-      <CardContent className="min-w-0">
-        {reports.length === 0 ? (
-          <Empty className="border">
-            <EmptyHeader>
-              <EmptyMedia variant="icon">
-                <ClipboardCheckIcon aria-hidden="true" />
-              </EmptyMedia>
-              <EmptyTitle>Aún no hay revisiones</EmptyTitle>
-              <EmptyDescription>
-                Las decisiones aceptadas o rechazadas quedarán registradas aquí.
-              </EmptyDescription>
-            </EmptyHeader>
-          </Empty>
-        ) : (
-          <>
-            <div className="hidden md:block">
-              <Table className="min-w-250">
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Fecha</TableHead>
-                    <TableHead>Responsable</TableHead>
-                    <TableHead>Sitio</TableHead>
-                    <TableHead className="text-right">Importe</TableHead>
-                    <TableHead>Estado</TableHead>
-                    <TableHead className="text-right">Saldo inicial</TableHead>
-                    <TableHead className="text-right">Saldo final</TableHead>
-                    <TableHead>Nota</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {reports.map((report) => (
-                    <TableRow key={report.id}>
-                      <TableCell className="font-medium">{formatReportDate(report.date)}</TableCell>
-                      <TableCell>{report.userName}</TableCell>
-                      <TableCell>{report.websiteName}</TableCell>
-                      <TableCell className="text-right font-medium tabular-nums">
-                        {formatCurrency(report.amount)}
-                      </TableCell>
-                      <TableCell>
-                        <ReportStatusBadge status={report.status} />
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {report.startAmount === null ? "—" : formatCurrency(report.startAmount)}
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {report.endAmount === null ? "—" : formatCurrency(report.endAmount)}
-                      </TableCell>
-                      <TableCell className="max-w-64 whitespace-normal text-muted-foreground">
-                        {report.rejectionNote ?? "—"}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-
-            <div className="flex flex-col gap-3 md:hidden">
-              {reports.map((report) => (
-                <ReviewedMobileCard key={report.id} report={report} />
-              ))}
-            </div>
-          </>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
 function PendingMobileCard({
   report,
   selected,
@@ -424,37 +339,6 @@ function PendingMobileCard({
       </CardHeader>
       <CardContent>
         <p className="text-lg font-semibold tabular-nums">{formatCurrency(report.amount)}</p>
-      </CardContent>
-    </Card>
-  );
-}
-
-function ReviewedMobileCard({ report }: { report: ReviewedReport }) {
-  const hasBalances = report.startAmount !== null && report.endAmount !== null;
-
-  return (
-    <Card size="sm">
-      <CardHeader>
-        <CardTitle>{report.websiteName}</CardTitle>
-        <CardDescription>
-          {report.userName} · {formatReportDate(report.date)}
-        </CardDescription>
-        <CardAction>
-          <ReportStatusBadge status={report.status} />
-        </CardAction>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-3">
-        <p className="text-lg font-semibold tabular-nums">{formatCurrency(report.amount)}</p>
-        {hasBalances ? (
-          <p className="inline-flex items-center gap-1.5 text-sm text-muted-foreground tabular-nums">
-            Saldo {formatCurrency(report.startAmount!)}
-            <ArrowRightIcon aria-hidden="true" />
-            {formatCurrency(report.endAmount!)}
-          </p>
-        ) : null}
-        {report.rejectionNote ? (
-          <p className="text-sm text-muted-foreground">Motivo: {report.rejectionNote}</p>
-        ) : null}
       </CardContent>
     </Card>
   );

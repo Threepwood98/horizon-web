@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState, useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   ArrowRightIcon,
   CalendarIcon,
@@ -18,7 +19,12 @@ import {
   saveReportAction,
   submitReportsAction,
 } from "@/app/actions/reports";
-import { ActionFeedback, formatReportDate, ReportStatusBadge } from "@/components/reports/report-ui";
+import {
+  ActionFeedback,
+  formatLongReportDate,
+  formatReportDate,
+  ReportStatusBadge,
+} from "@/components/reports/report-ui";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -40,9 +46,20 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty";
-import { Field, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
+import {
+  Field,
+  FieldDescription,
+  FieldError,
+  FieldGroup,
+  FieldLabel,
+  FieldLegend,
+  FieldSet,
+} from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
+import {
+  NativeSelect,
+  NativeSelectOption,
+} from "@/components/ui/native-select";
 import {
   Popover,
   PopoverContent,
@@ -65,6 +82,18 @@ import type { getReportsData } from "@/lib/queries";
 type ReportsData = Awaited<ReturnType<typeof getReportsData>>;
 type Report = ReportsData["reports"][number];
 
+const businessDateFormatter = new Intl.DateTimeFormat("en-US", {
+  timeZone: "America/Havana",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+
+const breakdownNumberFormatter = new Intl.NumberFormat("en-US", {
+  minimumFractionDigits: 0,
+  maximumFractionDigits: 2,
+});
+
 const reportTabs = [
   {
     value: "draft",
@@ -73,22 +102,17 @@ const reportTabs = [
     emptyDescription: "Los nuevos borradores aparecerán aquí.",
   },
   {
-    value: "rejected",
-    label: "Rechazados",
-    emptyTitle: "No hay reportes rechazados",
-    emptyDescription: "Los reportes rechazados aparecerán aquí junto con el motivo.",
-  },
-  {
     value: "sent",
     label: "Pendientes",
     emptyTitle: "No hay reportes pendientes",
     emptyDescription: "Los reportes enviados a revisión aparecerán aquí.",
   },
   {
-    value: "accepted",
-    label: "Aceptados",
-    emptyTitle: "No hay reportes aceptados",
-    emptyDescription: "Los reportes aprobados aparecerán aquí con sus saldos.",
+    value: "rejected",
+    label: "Rechazados",
+    emptyTitle: "No hay reportes rechazados",
+    emptyDescription:
+      "Los reportes rechazados aparecerán aquí junto con el motivo.",
   },
 ] as const satisfies ReadonlyArray<{
   value: Report["status"];
@@ -97,14 +121,39 @@ const reportTabs = [
   emptyDescription: string;
 }>;
 
-export function ReportsWorkspace({ data, today }: { data: ReportsData; today: string }) {
+export function ReportsWorkspace({
+  data,
+  today,
+  currentUserId,
+  isLeader,
+}: {
+  data: ReportsData;
+  today: string;
+  currentUserId: string;
+  isLeader: boolean;
+}) {
+  const router = useRouter();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const editingReport = data.reports.find((report) => report.id === editingId);
+  const editingReport = data.reports.find(
+    (report) => report.id === editingId && isEditable(report),
+  );
   const editableReports = data.reports.filter(isEditable);
   const editableIdSet = new Set(editableReports.map((report) => report.id));
   const currentSelectedIds = selectedIds.filter((id) => editableIdSet.has(id));
-  const pendingCount = data.reports.filter((report) => report.status === "sent").length;
+  const pendingCount = data.reports.filter(
+    (report) => report.status === "sent",
+  ).length;
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (getBusinessDate(new Date()) !== today) {
+        router.refresh();
+      }
+    }, 30_000);
+
+    return () => window.clearInterval(timer);
+  }, [router, today]);
 
   function toggleReport(reportId: string, checked: boolean) {
     setSelectedIds((current) =>
@@ -130,7 +179,9 @@ export function ReportsWorkspace({ data, today }: { data: ReportsData; today: st
 
     if (window.matchMedia("(max-width: 1279px)").matches) {
       requestAnimationFrame(() => {
-        document.getElementById("report-editor")?.scrollIntoView({ behavior: "smooth", block: "start" });
+        document
+          .getElementById("report-editor")
+          ?.scrollIntoView({ behavior: "smooth", block: "start" });
       });
     }
   }
@@ -146,26 +197,36 @@ export function ReportsWorkspace({ data, today }: { data: ReportsData; today: st
             Reportes de ganancias
           </h1>
           <p className="text-sm text-muted-foreground">
-            Guarda avances como borrador y envía varios reportes cuando estén listos para revisión.
+            Guarda avances como borrador y envía varios reportes cuando estén
+            listos para revisión.
           </p>
         </div>
-        <div
-          className="flex flex-wrap gap-2"
-          role="group"
-          aria-label="Resumen de reportes"
-        >
-          <Badge variant="outline">{editableReports.length} editables</Badge>
-          <Badge variant="secondary">{pendingCount} pendientes</Badge>
-          <Badge variant="outline">{data.reports.length} recientes</Badge>
+        <div className="flex flex-col gap-2 sm:items-end">
+          <Badge variant="outline">
+            <CalendarIcon data-icon="inline-start" aria-hidden="true" />
+            <time dateTime={today}>{capitalize(formatLongReportDate(today))}</time>
+          </Badge>
+          <div
+            className="flex flex-wrap gap-2"
+            role="group"
+            aria-label="Resumen de reportes"
+          >
+            <Badge variant="outline">{editableReports.length} editables</Badge>
+            <Badge variant="secondary">{pendingCount} pendientes</Badge>
+            <Badge variant="outline">{data.reports.length} recientes</Badge>
+          </div>
         </div>
       </header>
 
       <div className="grid min-w-0 items-start gap-6 xl:grid-cols-[minmax(18rem,0.72fr)_minmax(0,1.55fr)]">
         <ReportEditor
-          key={editingId ?? "new-report"}
+          key={editingReport?.id ?? "new-report"}
           report={editingReport}
           websites={data.websites}
+          members={data.members}
           today={today}
+          currentUserId={currentUserId}
+          isLeader={isLeader}
           onCancel={() => setEditingId(null)}
         />
 
@@ -175,6 +236,7 @@ export function ReportsWorkspace({ data, today }: { data: ReportsData; today: st
           onToggle={toggleReport}
           onToggleAll={toggleReports}
           onEdit={startEditing}
+          showMember={isLeader}
         />
       </div>
     </section>
@@ -184,21 +246,39 @@ export function ReportsWorkspace({ data, today }: { data: ReportsData; today: st
 function ReportEditor({
   report,
   websites,
+  members,
   today,
+  currentUserId,
+  isLeader,
   onCancel,
 }: {
   report: Report | undefined;
   websites: ReportsData["websites"];
+  members: ReportsData["members"];
   today: string;
+  currentUserId: string;
+  isLeader: boolean;
   onCancel: () => void;
 }) {
-  const [state, formAction, isPending] = useActionState(saveReportAction, initialActionState);
+  const [state, formAction, isPending] = useActionState(
+    saveReportAction,
+    initialActionState,
+  );
   const formRef = useRef<HTMLFormElement>(null);
+  const ownerError = state.fieldErrors?.ownerId?.[0];
   const websiteError = state.fieldErrors?.websiteId?.[0];
   const dateError = state.fieldErrors?.date?.[0];
   const amountError = state.fieldErrors?.amount?.[0];
+  const entryAmountsError = state.fieldErrors?.entryAmounts?.[0];
+  const editingDraft = report?.status === "draft";
+  const reportDate = report?.date ?? today;
+  const defaultOwnerId =
+    report?.userId ??
+    (members.some((member) => member.id === currentUserId)
+      ? currentUserId
+      : (members[0]?.id ?? ""));
   const formKey = report
-    ? `${report.id}:${report.websiteId}:${report.date}:${report.amount}`
+    ? `${report.id}:${report.userId}:${report.websiteId}:${report.date}:${report.amount}:${report.breakdown.join(",")}`
     : "new-report-form";
 
   useEffect(() => {
@@ -212,9 +292,11 @@ function ReportEditor({
       <CardHeader>
         <CardTitle>{report ? "Editar reporte" : "Nuevo reporte"}</CardTitle>
         <CardDescription>
-          {report
-            ? "Al guardar, el reporte volverá a borrador y quedará listo para reenviar."
-            : "Registra la ganancia de un sitio. Podrás enviarla después."}
+          {editingDraft
+            ? "Corrige o elimina las entradas que forman el importe total del borrador."
+            : report
+              ? "Al guardar, el reporte volverá a borrador y quedará listo para reenviar."
+              : "Registra la ganancia de un sitio. Podrás enviarla después."}
         </CardDescription>
         <CardAction>
           <Badge variant={report ? "secondary" : "outline"}>
@@ -223,22 +305,75 @@ function ReportEditor({
         </CardAction>
       </CardHeader>
 
-      <form key={formKey} ref={formRef} action={formAction} className="flex flex-col gap-4">
+      <form
+        key={formKey}
+        ref={formRef}
+        action={formAction}
+        className="flex flex-col gap-4"
+      >
         <CardContent className="flex flex-col gap-4">
-          {report ? <input type="hidden" name="reportId" value={report.id} /> : null}
+          {report ? (
+            <input type="hidden" name="reportId" value={report.id} />
+          ) : null}
 
           {websites.length === 0 ? (
             <Alert variant="destructive">
               <WalletCardsIcon aria-hidden="true" />
               <AlertTitle>No hay sitios disponibles</AlertTitle>
               <AlertDescription>
-                Tu equipo necesita al menos un sitio activo antes de crear reportes.
+                Tu equipo necesita al menos un sitio activo antes de crear
+                reportes.
               </AlertDescription>
             </Alert>
           ) : null}
 
           <FieldGroup className="grid gap-4 sm:grid-cols-2">
-            <Field className="sm:col-span-2" data-invalid={websiteError ? true : undefined}>
+            {isLeader ? (
+              <Field
+                className="sm:col-span-2"
+                data-disabled={report ? true : undefined}
+                data-invalid={ownerError ? true : undefined}
+              >
+                <FieldLabel htmlFor="report-owner">
+                  Reportar a nombre de
+                </FieldLabel>
+                {report ? (
+                  <input type="hidden" name="ownerId" value={report.userId} />
+                ) : null}
+                <NativeSelect
+                  id="report-owner"
+                  name={report ? undefined : "ownerId"}
+                  defaultValue={defaultOwnerId}
+                  required
+                  disabled={isPending || Boolean(report) || members.length === 0}
+                  aria-invalid={ownerError ? true : undefined}
+                  aria-describedby={
+                    ownerError ? "report-owner-error" : undefined
+                  }
+                  className="w-full"
+                >
+                  <NativeSelectOption value="" disabled>
+                    Selecciona un miembro
+                  </NativeSelectOption>
+                  {members.map((member) => (
+                    <NativeSelectOption key={member.id} value={member.id}>
+                      {member.name}
+                    </NativeSelectOption>
+                  ))}
+                </NativeSelect>
+                {report ? (
+                  <FieldDescription>
+                    El propietario de un reporte existente no se puede cambiar.
+                  </FieldDescription>
+                ) : null}
+                <FieldError id="report-owner-error">{ownerError}</FieldError>
+              </Field>
+            ) : null}
+
+            <Field
+              className="sm:col-span-2"
+              data-invalid={websiteError ? true : undefined}
+            >
               <FieldLabel htmlFor="report-website">Sitio</FieldLabel>
               <NativeSelect
                 id="report-website"
@@ -247,7 +382,9 @@ function ReportEditor({
                 required
                 disabled={isPending || websites.length === 0}
                 aria-invalid={websiteError ? true : undefined}
-                aria-describedby={websiteError ? "report-website-error" : undefined}
+                aria-describedby={
+                  websiteError ? "report-website-error" : undefined
+                }
                 className="w-full"
               >
                 <NativeSelectOption value="" disabled>
@@ -262,38 +399,77 @@ function ReportEditor({
               <FieldError id="report-website-error">{websiteError}</FieldError>
             </Field>
 
-            <Field data-invalid={dateError ? true : undefined}>
-              <FieldLabel htmlFor="report-date">Fecha</FieldLabel>
-              <ReportDatePicker
-                id="report-date"
-                defaultValue={report?.date ?? today}
-                maxValue={today}
-                disabled={isPending}
-                invalid={Boolean(dateError)}
-                describedBy={dateError ? "report-date-error" : undefined}
-              />
-              <FieldError id="report-date-error">{dateError}</FieldError>
-            </Field>
+            {isLeader || report ? (
+              <Field
+                className={editingDraft ? "sm:col-span-2" : undefined}
+                data-invalid={dateError ? true : undefined}
+              >
+                <FieldLabel htmlFor="report-date">Fecha</FieldLabel>
+                {isLeader ? (
+                  <ReportDatePicker
+                    id="report-date"
+                    defaultValue={reportDate}
+                    maxValue={today}
+                    disabled={isPending}
+                    invalid={Boolean(dateError)}
+                    describedBy={dateError ? "report-date-error" : undefined}
+                  />
+                ) : (
+                  <FixedReportDate
+                    id="report-date"
+                    value={reportDate}
+                    invalid={Boolean(dateError)}
+                    describedBy={dateError ? "report-date-error" : undefined}
+                  />
+                )}
+                <FieldError id="report-date-error">{dateError}</FieldError>
+              </Field>
+            ) : null}
 
-            <Field data-invalid={amountError ? true : undefined}>
-              <FieldLabel htmlFor="report-amount">Importe (USD)</FieldLabel>
-              <Input
-                id="report-amount"
-                name="amount"
-                type="number"
-                inputMode="decimal"
-                min="0.01"
-                max="9999999999.99"
-                step="0.01"
-                defaultValue={report?.amount ?? ""}
-                placeholder="0.00"
-                required
-                disabled={isPending}
-                aria-invalid={amountError ? true : undefined}
-                aria-describedby={amountError ? "report-amount-error" : undefined}
-              />
-              <FieldError id="report-amount-error">{amountError}</FieldError>
-            </Field>
+            {editingDraft ? (
+              <FieldSet className="gap-3 sm:col-span-2">
+                <FieldLegend variant="label">Desglose (USD)</FieldLegend>
+                <FieldDescription>
+                  Modifica cada entrada o elimina las que no correspondan.
+                </FieldDescription>
+                <DraftBreakdownFields
+                  defaultValues={report.breakdown}
+                  disabled={isPending}
+                  invalid={Boolean(entryAmountsError)}
+                  describedBy={
+                    entryAmountsError ? "report-entry-amounts-error" : undefined
+                  }
+                />
+                <FieldError id="report-entry-amounts-error">
+                  {entryAmountsError}
+                </FieldError>
+              </FieldSet>
+            ) : (
+              <Field
+                className={!isLeader && !report ? "sm:col-span-2" : undefined}
+                data-invalid={amountError ? true : undefined}
+              >
+                <FieldLabel htmlFor="report-amount">Importe (USD)</FieldLabel>
+                <Input
+                  id="report-amount"
+                  name="amount"
+                  type="number"
+                  inputMode="decimal"
+                  min="0.01"
+                  max="9999999999.99"
+                  step="0.01"
+                  defaultValue={report?.amount ?? ""}
+                  placeholder="0.00"
+                  required
+                  disabled={isPending}
+                  aria-invalid={amountError ? true : undefined}
+                  aria-describedby={
+                    amountError ? "report-amount-error" : undefined
+                  }
+                />
+                <FieldError id="report-amount-error">{amountError}</FieldError>
+              </Field>
+            )}
           </FieldGroup>
 
           <ActionFeedback state={state} />
@@ -301,17 +477,151 @@ function ReportEditor({
 
         <CardFooter className="justify-end gap-2">
           {report ? (
-            <Button type="button" variant="outline" onClick={onCancel} disabled={isPending}>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={onCancel}
+              disabled={isPending}
+            >
               Cancelar
             </Button>
           ) : null}
           <Button type="submit" disabled={isPending || websites.length === 0}>
-            {isPending ? <Spinner data-icon="inline-start" /> : <FilePlus2Icon data-icon="inline-start" />}
-            {isPending ? "Guardando..." : report ? "Guardar cambios" : "Guardar borrador"}
+            {isPending ? (
+              <Spinner data-icon="inline-start" />
+            ) : (
+              <FilePlus2Icon data-icon="inline-start" />
+            )}
+            {isPending
+              ? "Guardando..."
+              : report
+                ? "Guardar cambios"
+                : "Guardar borrador"}
           </Button>
         </CardFooter>
       </form>
     </Card>
+  );
+}
+
+function FixedReportDate({
+  id,
+  value,
+  invalid,
+  describedBy,
+}: {
+  id: string;
+  value: string;
+  invalid: boolean;
+  describedBy?: string;
+}) {
+  const restrictionId = `${id}-restriction`;
+  const descriptionIds = [restrictionId, describedBy].filter(Boolean).join(" ");
+
+  return (
+    <>
+      <input type="hidden" name="date" value={value} />
+      <div className="relative">
+        <CalendarIcon
+          className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground"
+          aria-hidden="true"
+        />
+        <Input
+          id={id}
+          value={formatReportDate(value)}
+          readOnly
+          aria-invalid={invalid || undefined}
+          aria-describedby={descriptionIds}
+          className="pl-8"
+        />
+      </div>
+      <FieldDescription id={restrictionId}>
+        La fecha original de este reporte no se puede modificar.
+      </FieldDescription>
+    </>
+  );
+}
+
+function DraftBreakdownFields({
+  defaultValues,
+  disabled,
+  invalid,
+  describedBy,
+}: {
+  defaultValues: number[];
+  disabled: boolean;
+  invalid: boolean;
+  describedBy?: string;
+}) {
+  const [entries, setEntries] = useState(() =>
+    defaultValues.map((value, index) => ({ id: index, value: String(value) })),
+  );
+  const total =
+    entries.reduce((sum, entry) => {
+      if (!/^\d{1,10}(?:\.\d{0,2})?$/.test(entry.value)) {
+        return sum;
+      }
+      return sum + Math.round(Number(entry.value) * 100);
+    }, 0) / 100;
+
+  function updateEntry(id: number, value: string) {
+    setEntries((current) =>
+      current.map((entry) => (entry.id === id ? { ...entry, value } : entry)),
+    );
+  }
+
+  function removeEntry(id: number) {
+    setEntries((current) =>
+      current.length === 1
+        ? current
+        : current.filter((entry) => entry.id !== id),
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-3">
+      {entries.map((entry, index) => {
+        const inputId = `report-entry-${entry.id}`;
+
+        return (
+          <Field key={entry.id} data-invalid={invalid || undefined}>
+            <FieldLabel htmlFor={inputId}>Entrada {index + 1}</FieldLabel>
+            <div className="flex items-center gap-2">
+              <Input
+                id={inputId}
+                name="entryAmounts"
+                type="number"
+                inputMode="decimal"
+                min="0.01"
+                max="9999999999.99"
+                step="0.01"
+                value={entry.value}
+                onChange={(event) => updateEntry(entry.id, event.target.value)}
+                required
+                disabled={disabled}
+                aria-invalid={invalid || undefined}
+                aria-describedby={describedBy}
+              />
+              <Button
+                type="button"
+                variant="destructive"
+                size="icon"
+                onClick={() => removeEntry(entry.id)}
+                disabled={disabled || entries.length === 1}
+                aria-label={`Eliminar entrada ${index + 1}`}
+              >
+                <Trash2Icon aria-hidden="true" />
+              </Button>
+            </div>
+          </Field>
+        );
+      })}
+
+      <div className="flex items-center justify-between rounded-lg bg-muted/50 px-3 py-2 text-sm">
+        <span className="text-muted-foreground">Importe total</span>
+        <strong className="tabular-nums">{formatCurrency(total)}</strong>
+      </div>
+    </div>
   );
 }
 
@@ -414,12 +724,14 @@ function ReportLedger({
   onToggle,
   onToggleAll,
   onEdit,
+  showMember,
 }: {
   reports: ReportsData["reports"];
   selectedIds: string[];
   onToggle: (reportId: string, checked: boolean) => void;
   onToggleAll: (reportIds: string[], checked: boolean) => void;
   onEdit: (reportId: string) => void;
+  showMember: boolean;
 }) {
   const [deleteState, deleteFormAction, deletePending] = useActionState(
     deleteReportAction,
@@ -430,12 +742,13 @@ function ReportLedger({
   return (
     <Card className="min-w-0">
       <CardHeader>
-        <CardTitle>Historial reciente</CardTitle>
+        <CardTitle>Reportes</CardTitle>
         <CardDescription>
-          Consulta cada estado y selecciona borradores o rechazados para enviarlos juntos.
+          Consulta los reportes activos y selecciona borradores o rechazados
+          para enviarlos juntos.
         </CardDescription>
         <CardAction>
-          <Badge variant="outline">Últimos {reports.length}</Badge>
+          <Badge variant="outline">{reports.length} reportes</Badge>
         </CardAction>
       </CardHeader>
 
@@ -450,7 +763,10 @@ function ReportLedger({
                 <TabsTrigger key={tab.value} value={tab.value}>
                   {tab.label}
                   <Badge variant="secondary">
-                    {reports.filter((report) => report.status === tab.value).length}
+                    {
+                      reports.filter((report) => report.status === tab.value)
+                        .length
+                    }
                   </Badge>
                 </TabsTrigger>
               ))}
@@ -460,16 +776,20 @@ function ReportLedger({
           {reportTabs.map((tab) => (
             <TabsContent key={tab.value} value={tab.value}>
               <ReportStatusPanel
-                reports={reports.filter((report) => report.status === tab.value)}
+                reports={reports.filter(
+                  (report) => report.status === tab.value,
+                )}
                 selectedSet={selectedSet}
                 deletePending={deletePending}
                 emptyTitle={tab.emptyTitle}
                 emptyDescription={tab.emptyDescription}
                 selectionLabel={tab.label.toLowerCase()}
-                showDetail={tab.value === "rejected"}
+                showBreakdown={tab.value === "draft"}
+                showNote={tab.value === "rejected"}
                 onToggle={onToggle}
                 onToggleAll={onToggleAll}
                 onEdit={onEdit}
+                showMember={showMember}
               />
             </TabsContent>
           ))}
@@ -490,10 +810,12 @@ function ReportStatusPanel({
   emptyTitle,
   emptyDescription,
   selectionLabel,
-  showDetail,
+  showBreakdown,
+  showNote,
   onToggle,
   onToggleAll,
   onEdit,
+  showMember,
 }: {
   reports: Report[];
   selectedSet: ReadonlySet<string>;
@@ -501,14 +823,17 @@ function ReportStatusPanel({
   emptyTitle: string;
   emptyDescription: string;
   selectionLabel: string;
-  showDetail: boolean;
+  showBreakdown: boolean;
+  showNote: boolean;
   onToggle: (reportId: string, checked: boolean) => void;
   onToggleAll: (reportIds: string[], checked: boolean) => void;
   onEdit: (reportId: string) => void;
+  showMember: boolean;
 }) {
   const editableIds = reports.filter(isEditable).map((report) => report.id);
   const selectedCount = editableIds.filter((id) => selectedSet.has(id)).length;
-  const allSelected = editableIds.length > 0 && selectedCount === editableIds.length;
+  const allSelected =
+    editableIds.length > 0 && selectedCount === editableIds.length;
   const someSelected = selectedCount > 0 && !allSelected;
 
   if (reports.length === 0) {
@@ -543,16 +868,19 @@ function ReportStatusPanel({
       ) : null}
 
       <div className="hidden md:block">
-        <Table className="min-w-225">
+        <Table>
           <TableHeader>
             <TableRow>
               <TableHead className="w-10">
                 <span className="sr-only">Seleccionar</span>
               </TableHead>
               <TableHead>Fecha</TableHead>
+              {showMember ? <TableHead>Miembro</TableHead> : null}
               <TableHead>Sitio</TableHead>
               <TableHead className="text-right">Importe</TableHead>
-              {showDetail ? <TableHead>Detalle</TableHead> : null}
+              {showBreakdown ? <TableHead>Desglose</TableHead> : null}
+              {showNote ? <TableHead>Nota</TableHead> : null}
+              <TableHead>Registro</TableHead>
               <TableHead className="text-right">Acciones</TableHead>
             </TableRow>
           </TableHeader>
@@ -566,7 +894,9 @@ function ReportStatusPanel({
                   {isEditable(report) ? (
                     <Checkbox
                       checked={selectedSet.has(report.id)}
-                      onCheckedChange={(checked) => onToggle(report.id, checked)}
+                      onCheckedChange={(checked) =>
+                        onToggle(report.id, checked)
+                      }
                       aria-label={`Seleccionar reporte de ${report.websiteName} del ${formatReportDate(report.date)}`}
                     />
                   ) : null}
@@ -574,15 +904,28 @@ function ReportStatusPanel({
                 <TableCell className="font-medium">
                   {formatReportDate(report.date)}
                 </TableCell>
+                {showMember ? (
+                  <TableCell className="font-medium">
+                    {report.userName}
+                  </TableCell>
+                ) : null}
                 <TableCell>{report.websiteName}</TableCell>
                 <TableCell className="text-right font-medium tabular-nums">
                   {formatCurrency(report.amount)}
                 </TableCell>
-                {showDetail ? (
+                {showBreakdown ? (
+                  <TableCell className="max-w-64 whitespace-normal text-muted-foreground">
+                    <ReportBreakdown amounts={report.breakdown} />
+                  </TableCell>
+                ) : null}
+                {showNote ? (
                   <TableCell className="max-w-64 whitespace-normal text-muted-foreground">
                     <ReportDetail report={report} />
                   </TableCell>
                 ) : null}
+                <TableCell className="max-w-72 whitespace-normal">
+                  <ReportMetadata report={report} />
+                </TableCell>
                 <TableCell>
                   {isEditable(report) ? (
                     <div className="flex justify-end gap-1.5">
@@ -613,7 +956,9 @@ function ReportStatusPanel({
                       </Button>
                     </div>
                   ) : (
-                    <span className="block text-right text-muted-foreground">—</span>
+                    <span className="block text-right text-muted-foreground">
+                      —
+                    </span>
                   )}
                 </TableCell>
               </TableRow>
@@ -631,6 +976,7 @@ function ReportStatusPanel({
             deletePending={deletePending}
             onToggle={onToggle}
             onEdit={onEdit}
+            showMember={showMember}
           />
         ))}
       </div>
@@ -639,13 +985,24 @@ function ReportStatusPanel({
 }
 
 function SubmitReportsForm({ reportIds }: { reportIds: string[] }) {
-  const [state, formAction, isPending] = useActionState(submitReportsAction, initialActionState);
+  const [state, formAction, isPending] = useActionState(
+    submitReportsAction,
+    initialActionState,
+  );
 
   return (
     <div className="flex w-full flex-col gap-3">
-      <form action={formAction} className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <form
+        action={formAction}
+        className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"
+      >
         {reportIds.map((reportId) => (
-          <input key={reportId} type="hidden" name="reportIds" value={reportId} />
+          <input
+            key={reportId}
+            type="hidden"
+            name="reportIds"
+            value={reportId}
+          />
         ))}
         <p className="text-sm text-muted-foreground">
           {reportIds.length === 0
@@ -653,7 +1010,11 @@ function SubmitReportsForm({ reportIds }: { reportIds: string[] }) {
             : `${reportIds.length} reporte${reportIds.length === 1 ? " seleccionado" : "s seleccionados"}.`}
         </p>
         <Button type="submit" disabled={isPending || reportIds.length === 0}>
-          {isPending ? <Spinner data-icon="inline-start" /> : <SendIcon data-icon="inline-start" />}
+          {isPending ? (
+            <Spinner data-icon="inline-start" />
+          ) : (
+            <SendIcon data-icon="inline-start" />
+          )}
           {isPending ? "Enviando..." : "Enviar a revisión"}
         </Button>
       </form>
@@ -668,12 +1029,14 @@ function ReportMobileCard({
   deletePending,
   onToggle,
   onEdit,
+  showMember,
 }: {
   report: Report;
   selected: boolean;
   deletePending: boolean;
   onToggle: (reportId: string, checked: boolean) => void;
   onEdit: (reportId: string) => void;
+  showMember: boolean;
 }) {
   return (
     <Card size="sm">
@@ -692,18 +1055,36 @@ function ReportMobileCard({
             report.websiteName
           )}
         </CardTitle>
-        <CardDescription>{formatReportDate(report.date)}</CardDescription>
+        <CardDescription>
+          {formatReportDate(report.date)}
+          {showMember ? ` · ${report.userName}` : ""}
+        </CardDescription>
         <CardAction>
           <ReportStatusBadge status={report.status} />
         </CardAction>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
-        <p className="text-lg font-semibold tabular-nums">{formatCurrency(report.amount)}</p>
-        <ReportDetail report={report} />
+        <p className="text-lg font-semibold tabular-nums">
+          {formatCurrency(report.amount)}
+        </p>
+        {report.status === "draft" ? (
+          <div className="flex items-start justify-between gap-3 text-sm">
+            <span className="text-muted-foreground">Desglose</span>
+            <ReportBreakdown amounts={report.breakdown} />
+          </div>
+        ) : (
+          <ReportDetail report={report} />
+        )}
+        <ReportMetadata report={report} hideEmpty />
       </CardContent>
       {isEditable(report) ? (
         <CardFooter className="justify-end gap-2">
-          <Button type="button" size="sm" variant="outline" onClick={() => onEdit(report.id)}>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => onEdit(report.id)}
+          >
             <PencilIcon data-icon="inline-start" />
             Editar
           </Button>
@@ -716,7 +1097,11 @@ function ReportMobileCard({
             value={report.id}
             disabled={deletePending}
           >
-            {deletePending ? <Spinner data-icon="inline-start" /> : <Trash2Icon data-icon="inline-start" />}
+            {deletePending ? (
+              <Spinner data-icon="inline-start" />
+            ) : (
+              <Trash2Icon data-icon="inline-start" />
+            )}
             Eliminar
           </Button>
         </CardFooter>
@@ -725,12 +1110,26 @@ function ReportMobileCard({
   );
 }
 
+function ReportBreakdown({ amounts }: { amounts: number[] }) {
+  return (
+    <span className="tabular-nums">
+      {amounts
+        .map((amount) => breakdownNumberFormatter.format(amount))
+        .join(" + ")}
+    </span>
+  );
+}
+
 function ReportDetail({ report }: { report: Report }) {
   if (report.status === "rejected" && report.rejectionNote) {
     return <span>Motivo: {report.rejectionNote}</span>;
   }
 
-  if (report.status === "accepted" && report.startAmount !== null && report.endAmount !== null) {
+  if (
+    report.status === "accepted" &&
+    report.startAmount !== null &&
+    report.endAmount !== null
+  ) {
     return (
       <span className="inline-flex items-center gap-1.5 tabular-nums">
         {formatCurrency(report.startAmount)}
@@ -745,6 +1144,44 @@ function ReportDetail({ report }: { report: Report }) {
   }
 
   return <span>Listo para editar o enviar</span>;
+}
+
+function ReportMetadata({
+  report,
+  hideEmpty = false,
+}: {
+  report: Report;
+  hideEmpty?: boolean;
+}) {
+  const automaticallySubmitted = report.submissionOrigin === "automatic";
+
+  if (!report.createdBy && !automaticallySubmitted) {
+    return hideEmpty ? null : <span className="text-muted-foreground">—</span>;
+  }
+
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {report.createdBy ? (
+        <Badge variant="outline">{report.createdBy.name}</Badge>
+      ) : null}
+      {automaticallySubmitted ? (
+        <Badge variant="secondary">auto</Badge>
+      ) : null}
+    </div>
+  );
+}
+
+function getBusinessDate(value: Date) {
+  const parts = businessDateFormatter.formatToParts(value);
+  const year = parts.find((part) => part.type === "year")?.value;
+  const month = parts.find((part) => part.type === "month")?.value;
+  const day = parts.find((part) => part.type === "day")?.value;
+
+  return `${year}-${month}-${day}`;
+}
+
+function capitalize(value: string) {
+  return value.charAt(0).toLocaleUpperCase("es-ES") + value.slice(1);
 }
 
 function isEditable(report: Report) {
