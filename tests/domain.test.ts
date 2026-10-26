@@ -18,7 +18,11 @@ import {
 } from "../src/lib/report-breakdown";
 import { assertReportDateAllowed } from "../src/lib/report-date-policy";
 import { getSubmissionEventType } from "../src/lib/report-events";
-import { getReportEventScope, getReportScope } from "../src/lib/report-scope";
+import {
+  getReportEventScope,
+  getReportManagementScope,
+  getReportScope,
+} from "../src/lib/report-scope";
 
 test("date-only values round-trip without a time-zone shift", () => {
   const value = "2026-03-08";
@@ -71,13 +75,44 @@ test("report visibility follows the user's role", () => {
   assert.deepEqual(getReportScope({ ...baseUser, role: "admin" }), {});
 
   assert.deepEqual(getReportEventScope(baseUser), {
-    ownerId: "__forbidden__",
+    ownerId: "user-1",
   });
   assert.deepEqual(getReportEventScope({ ...baseUser, role: "leader" }), {
     teamId: "team-1",
   });
   assert.deepEqual(getReportEventScope({ ...baseUser, role: "manager" }), {});
   assert.deepEqual(getReportEventScope({ ...baseUser, role: "admin" }), {});
+});
+
+test("active report management follows the immutable creator", () => {
+  const baseUser = {
+    id: "user-1",
+    name: "User",
+    email: "user@example.com",
+    image: null,
+    role: "user",
+    teamId: "team-1",
+    team: { name: "Team 1" },
+  } satisfies CurrentUser;
+
+  assert.deepEqual(getReportManagementScope(baseUser), {
+    createdById: "user-1",
+    userId: "user-1",
+    teamId: "team-1",
+  });
+  assert.deepEqual(
+    getReportManagementScope({ ...baseUser, id: "leader-1", role: "leader" }),
+    {
+      createdById: "leader-1",
+      teamId: "team-1",
+    },
+  );
+  assert.deepEqual(getReportManagementScope({ ...baseUser, role: "manager" }), {
+    id: { in: [] },
+  });
+  assert.deepEqual(getReportManagementScope({ ...baseUser, role: "admin" }), {
+    id: { in: [] },
+  });
 });
 
 test("submission events distinguish the first and later review cycles", () => {

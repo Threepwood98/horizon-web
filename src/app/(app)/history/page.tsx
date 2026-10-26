@@ -24,10 +24,6 @@ export default async function HistoryPage({ searchParams }: HistoryPageProps) {
     redirect("/login");
   }
 
-  if (user.role === "user") {
-    redirect("/dashboard");
-  }
-
   const pageValue = Array.isArray(requestedParams.page)
     ? requestedParams.page[0]
     : requestedParams.page;

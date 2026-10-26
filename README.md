@@ -57,8 +57,8 @@ Rerunning the seed signs out all demo users and removes reports created with tho
 
 ## Roles
 
-- `user`: creates, edits, submits, and follows active personal reports for the current civil day.
-- `leader`: can report for any member of the assigned team, reviews that team's reports, and sees its audit history.
+- `user`: creates, edits, submits, and follows the active reports they created, plus the audit history of every report owned by them.
+- `leader`: can create and manage reports for any member of the assigned team, reviews that team's submitted reports, and sees its audit history.
 - `manager`: sees the global report history and consolidated statistics, and configures teams, sites, and site accounts.
 - `admin`: has manager capabilities and controls user roles and assignments.
 
@@ -68,15 +68,15 @@ Permissions are enforced again in Server Actions and scoped database queries; hi
 
 1. A user saves a `draft` for a site enabled on their current team.
 2. Additional entries from the same creator for the same member, site, and date are added to that draft and retained as an editable breakdown. A report created by a leader never merges with one created by its owner.
-3. Drafts or corrected rejections are submitted manually as `sent`.
+3. Only the immutable creator can see and manage a report in the active reports workspace throughout its lifecycle (`draft`, `sent`, and `rejected`). Drafts or corrected rejections are submitted manually as `sent`; team submissions remain visible to the leader in the approval queue.
 4. At the start of a new business day, every older `draft` is submitted automatically. Rejected reports remain rejected until a user or leader corrects and submits them.
 5. The team's leader accepts or rejects a selection.
 6. Acceptance records immutable start/end balance snapshots in deterministic creation order.
 7. Rejection stores one review note on every selected report. Corrections keep the same report identity, and each later submission opens another review cycle.
 
-Every creation, added entry, edit, merge, submission, review, and deletion appends an immutable snapshot to `Historial`. These events survive report deletion. Leaders see their team's log, while managers and administrators see the global log; ordinary users do not have access to this section.
+Every creation, added entry, edit, merge, submission, review, and deletion appends an immutable snapshot to `Historial`. These events survive report deletion. Users see events for reports owned by them, including reports created on their behalf by a leader; leaders see their team's log, while managers and administrators see the global log.
 
-Automatic submission is idempotent and uses civil `YYYY-MM-DD` dates in `America/Havana`. Each run catches up every overdue draft, rather than depending on an exact execution minute. Automatic events and active reports use the short `auto` label, while delegated reports show only the creator leader's name.
+Automatic submission is idempotent and uses civil `YYYY-MM-DD` dates in `America/Havana`. Each run catches up every overdue draft, rather than depending on an exact execution minute. Automatic events and active reports use the short `auto` label. A delegated report shows its creator's name only in `Historial`.
 
 Only accepted reports contribute to totals and rankings. Daily averages divide accepted earnings by every calendar day in the selected range, including days without activity.
 

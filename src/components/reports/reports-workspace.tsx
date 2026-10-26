@@ -1,7 +1,6 @@
 "use client";
 
 import { useActionState, useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
 import {
   ArrowRightIcon,
   CalendarIcon,
@@ -21,7 +20,6 @@ import {
 } from "@/app/actions/reports";
 import {
   ActionFeedback,
-  formatLongReportDate,
   formatReportDate,
   ReportStatusBadge,
 } from "@/components/reports/report-ui";
@@ -82,13 +80,6 @@ import type { getReportsData } from "@/lib/queries";
 type ReportsData = Awaited<ReturnType<typeof getReportsData>>;
 type Report = ReportsData["reports"][number];
 
-const businessDateFormatter = new Intl.DateTimeFormat("en-US", {
-  timeZone: "America/Havana",
-  year: "numeric",
-  month: "2-digit",
-  day: "2-digit",
-});
-
 const breakdownNumberFormatter = new Intl.NumberFormat("en-US", {
   minimumFractionDigits: 0,
   maximumFractionDigits: 2,
@@ -132,7 +123,6 @@ export function ReportsWorkspace({
   currentUserId: string;
   isLeader: boolean;
 }) {
-  const router = useRouter();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const editingReport = data.reports.find(
@@ -144,16 +134,6 @@ export function ReportsWorkspace({
   const pendingCount = data.reports.filter(
     (report) => report.status === "sent",
   ).length;
-
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      if (getBusinessDate(new Date()) !== today) {
-        router.refresh();
-      }
-    }, 30_000);
-
-    return () => window.clearInterval(timer);
-  }, [router, today]);
 
   function toggleReport(reportId: string, checked: boolean) {
     setSelectedIds((current) =>
@@ -201,20 +181,14 @@ export function ReportsWorkspace({
             listos para revisión.
           </p>
         </div>
-        <div className="flex flex-col gap-2 sm:items-end">
-          <Badge variant="outline">
-            <CalendarIcon data-icon="inline-start" aria-hidden="true" />
-            <time dateTime={today}>{capitalize(formatLongReportDate(today))}</time>
-          </Badge>
-          <div
-            className="flex flex-wrap gap-2"
-            role="group"
-            aria-label="Resumen de reportes"
-          >
-            <Badge variant="outline">{editableReports.length} editables</Badge>
-            <Badge variant="secondary">{pendingCount} pendientes</Badge>
-            <Badge variant="outline">{data.reports.length} recientes</Badge>
-          </div>
+        <div
+          className="flex flex-wrap gap-2 sm:justify-end"
+          role="group"
+          aria-label="Resumen de reportes"
+        >
+          <Badge variant="outline">{editableReports.length} editables</Badge>
+          <Badge variant="secondary">{pendingCount} pendientes</Badge>
+          <Badge variant="outline">{data.reports.length} recientes</Badge>
         </div>
       </header>
 
@@ -399,29 +373,20 @@ function ReportEditor({
               <FieldError id="report-website-error">{websiteError}</FieldError>
             </Field>
 
-            {isLeader || report ? (
+            {isLeader ? (
               <Field
                 className={editingDraft ? "sm:col-span-2" : undefined}
                 data-invalid={dateError ? true : undefined}
               >
                 <FieldLabel htmlFor="report-date">Fecha</FieldLabel>
-                {isLeader ? (
-                  <ReportDatePicker
-                    id="report-date"
-                    defaultValue={reportDate}
-                    maxValue={today}
-                    disabled={isPending}
-                    invalid={Boolean(dateError)}
-                    describedBy={dateError ? "report-date-error" : undefined}
-                  />
-                ) : (
-                  <FixedReportDate
-                    id="report-date"
-                    value={reportDate}
-                    invalid={Boolean(dateError)}
-                    describedBy={dateError ? "report-date-error" : undefined}
-                  />
-                )}
+                <ReportDatePicker
+                  id="report-date"
+                  defaultValue={reportDate}
+                  maxValue={today}
+                  disabled={isPending}
+                  invalid={Boolean(dateError)}
+                  describedBy={dateError ? "report-date-error" : undefined}
+                />
                 <FieldError id="report-date-error">{dateError}</FieldError>
               </Field>
             ) : null}
@@ -446,7 +411,7 @@ function ReportEditor({
               </FieldSet>
             ) : (
               <Field
-                className={!isLeader && !report ? "sm:col-span-2" : undefined}
+                className={!isLeader ? "sm:col-span-2" : undefined}
                 data-invalid={amountError ? true : undefined}
               >
                 <FieldLabel htmlFor="report-amount">Importe (USD)</FieldLabel>
@@ -501,44 +466,6 @@ function ReportEditor({
         </CardFooter>
       </form>
     </Card>
-  );
-}
-
-function FixedReportDate({
-  id,
-  value,
-  invalid,
-  describedBy,
-}: {
-  id: string;
-  value: string;
-  invalid: boolean;
-  describedBy?: string;
-}) {
-  const restrictionId = `${id}-restriction`;
-  const descriptionIds = [restrictionId, describedBy].filter(Boolean).join(" ");
-
-  return (
-    <>
-      <input type="hidden" name="date" value={value} />
-      <div className="relative">
-        <CalendarIcon
-          className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground"
-          aria-hidden="true"
-        />
-        <Input
-          id={id}
-          value={formatReportDate(value)}
-          readOnly
-          aria-invalid={invalid || undefined}
-          aria-describedby={descriptionIds}
-          className="pl-8"
-        />
-      </div>
-      <FieldDescription id={restrictionId}>
-        La fecha original de este reporte no se puede modificar.
-      </FieldDescription>
-    </>
   );
 }
 
@@ -786,6 +713,7 @@ function ReportLedger({
                 selectionLabel={tab.label.toLowerCase()}
                 showBreakdown={tab.value === "draft"}
                 showNote={tab.value === "rejected"}
+                showRegistration={tab.value !== "draft"}
                 onToggle={onToggle}
                 onToggleAll={onToggleAll}
                 onEdit={onEdit}
@@ -812,6 +740,7 @@ function ReportStatusPanel({
   selectionLabel,
   showBreakdown,
   showNote,
+  showRegistration,
   onToggle,
   onToggleAll,
   onEdit,
@@ -825,6 +754,7 @@ function ReportStatusPanel({
   selectionLabel: string;
   showBreakdown: boolean;
   showNote: boolean;
+  showRegistration: boolean;
   onToggle: (reportId: string, checked: boolean) => void;
   onToggleAll: (reportIds: string[], checked: boolean) => void;
   onEdit: (reportId: string) => void;
@@ -880,7 +810,7 @@ function ReportStatusPanel({
               <TableHead className="text-right">Importe</TableHead>
               {showBreakdown ? <TableHead>Desglose</TableHead> : null}
               {showNote ? <TableHead>Nota</TableHead> : null}
-              <TableHead>Registro</TableHead>
+              {showRegistration ? <TableHead>Registro</TableHead> : null}
               <TableHead className="text-right">Acciones</TableHead>
             </TableRow>
           </TableHeader>
@@ -923,9 +853,11 @@ function ReportStatusPanel({
                     <ReportDetail report={report} />
                   </TableCell>
                 ) : null}
-                <TableCell className="max-w-72 whitespace-normal">
-                  <ReportMetadata report={report} />
-                </TableCell>
+                {showRegistration ? (
+                  <TableCell className="max-w-72 whitespace-normal">
+                    <ReportMetadata report={report} />
+                  </TableCell>
+                ) : null}
                 <TableCell>
                   {isEditable(report) ? (
                     <div className="flex justify-end gap-1.5">
@@ -1155,33 +1087,15 @@ function ReportMetadata({
 }) {
   const automaticallySubmitted = report.submissionOrigin === "automatic";
 
-  if (!report.createdBy && !automaticallySubmitted) {
+  if (!automaticallySubmitted) {
     return hideEmpty ? null : <span className="text-muted-foreground">—</span>;
   }
 
   return (
     <div className="flex flex-wrap gap-1.5">
-      {report.createdBy ? (
-        <Badge variant="outline">{report.createdBy.name}</Badge>
-      ) : null}
-      {automaticallySubmitted ? (
-        <Badge variant="secondary">auto</Badge>
-      ) : null}
+      <Badge variant="secondary">auto</Badge>
     </div>
   );
-}
-
-function getBusinessDate(value: Date) {
-  const parts = businessDateFormatter.formatToParts(value);
-  const year = parts.find((part) => part.type === "year")?.value;
-  const month = parts.find((part) => part.type === "month")?.value;
-  const day = parts.find((part) => part.type === "day")?.value;
-
-  return `${year}-${month}-${day}`;
-}
-
-function capitalize(value: string) {
-  return value.charAt(0).toLocaleUpperCase("es-ES") + value.slice(1);
 }
 
 function isEditable(report: Report) {

@@ -30,7 +30,7 @@ import {
   getSubmissionEventType,
   reportEventSnapshotSelect,
 } from "@/lib/report-events";
-import { getReportScope } from "@/lib/report-scope";
+import { getReportManagementScope } from "@/lib/report-scope";
 import { withSerializableTransaction } from "@/lib/transaction";
 
 const amountSchema = z
@@ -89,7 +89,7 @@ export async function saveReportAction(
       ? await db.report.findFirst({
           where: {
             id: parsed.data.reportId,
-            ...getReportScope(user),
+            ...getReportManagementScope(user),
             status: { in: ["draft", "rejected"] },
           },
           select: {
@@ -217,7 +217,7 @@ export async function saveReportAction(
           const report = await transaction.report.findFirst({
             where: {
               id: parsed.data.reportId,
-              ...getReportScope(user),
+              ...getReportManagementScope(user),
               status: { in: ["draft", "rejected"] },
             },
             select: {
@@ -411,7 +411,7 @@ export async function deleteReportAction(
       const report = await transaction.report.findFirst({
         where: {
           id: reportId,
-          ...getReportScope(user),
+          ...getReportManagementScope(user),
           status: { in: ["draft", "rejected"] },
         },
         select: reportEventSnapshotSelect,
@@ -452,7 +452,7 @@ export async function submitReportsAction(
       const reports = await transaction.report.findMany({
         where: {
           id: { in: reportIds },
-          ...getReportScope(user),
+          ...getReportManagementScope(user),
           teamId: user.teamId!,
           status: { in: ["draft", "rejected"] },
         },
@@ -480,7 +480,7 @@ export async function submitReportsAction(
       const updated = await transaction.report.updateMany({
         where: {
           id: { in: reportIds },
-          ...getReportScope(user),
+          ...getReportManagementScope(user),
           teamId: user.teamId!,
           status: { in: ["draft", "rejected"] },
         },

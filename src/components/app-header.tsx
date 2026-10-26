@@ -1,14 +1,20 @@
 "use client";
 
-import { useTransition } from "react";
+import { useEffect, useTransition } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import {
+  CalendarIcon,
   ChevronsUpDownIcon,
   LoaderCircleIcon,
   LogOutIcon,
 } from "lucide-react";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import {
+  formatLongReportDate,
+  formatReportDate,
+} from "@/components/reports/report-ui";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -24,6 +30,7 @@ import { SidebarTrigger } from "@/components/ui/sidebar";
 import { toast } from "@/components/ui/toast";
 import { authClient } from "@/lib/auth-client";
 import type { CurrentUser } from "@/lib/current-user";
+import { getTodayDate } from "@/lib/domain";
 
 const routeTitles = [
   ["/dashboard", "Panel financiero"],
@@ -53,7 +60,13 @@ function getInitials(name: string) {
   );
 }
 
-export function AppHeader({ user }: { user: CurrentUser }) {
+export function AppHeader({
+  user,
+  today,
+}: {
+  user: CurrentUser;
+  today: string;
+}) {
   const pathname = usePathname();
   const router = useRouter();
   const [isSigningOut, startSignOut] = useTransition();
@@ -61,6 +74,17 @@ export function AppHeader({ user }: { user: CurrentUser }) {
     routeTitles.find(
       ([href]) => pathname === href || pathname.startsWith(`${href}/`),
     )?.[1] ?? "Horizon";
+  const longDate = capitalize(formatLongReportDate(today));
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (getTodayDate() !== today) {
+        router.refresh();
+      }
+    }, 30_000);
+
+    return () => window.clearInterval(timer);
+  }, [router, today]);
 
   function handleSignOut() {
     startSignOut(async () => {
@@ -99,65 +123,83 @@ export function AppHeader({ user }: { user: CurrentUser }) {
         </div>
       </div>
 
-      <DropdownMenu>
-        <DropdownMenuTrigger
-          render={
-            <Button
-              variant="ghost"
-              className="h-auto min-w-0 gap-2 px-2 py-1.5"
-              aria-label={`Abrir menú de ${user.name}`}
-            />
-          }
+      <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
+        <Badge
+          variant="outline"
+          className="h-8 max-w-52 px-2 font-normal"
+          title={longDate}
         >
-          <Avatar size="sm">
-            {user.image ? (
-              <AvatarImage src={user.image} alt={user.name} />
-            ) : null}
-            <AvatarFallback>{getInitials(user.name)}</AvatarFallback>
-          </Avatar>
-          <span className="hidden min-w-0 text-left sm:grid">
-            <span className="max-w-36 truncate text-xs font-medium">
-              {user.name}
-            </span>
-            <span className="max-w-36 truncate text-[0.65rem] text-muted-foreground">
-              {roleLabels[user.role]}
-            </span>
-          </span>
-          <ChevronsUpDownIcon data-icon="inline-end" aria-hidden="true" />
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-64">
-          <DropdownMenuGroup>
-            <DropdownMenuLabel className="font-normal">
-              <span className="flex min-w-0 flex-col gap-0.5">
-                <span className="truncate text-sm font-medium text-foreground">
-                  {user.name}
-                </span>
-                <span className="truncate text-xs text-muted-foreground">
-                  {user.email}
-                </span>
+          <CalendarIcon data-icon="inline-start" aria-hidden="true" />
+          <time dateTime={today}>
+            <span className="hidden lg:inline">{longDate}</span>
+            <span className="lg:hidden">{formatReportDate(today)}</span>
+          </time>
+        </Badge>
+
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <Button
+                variant="ghost"
+                className="h-auto min-w-0 gap-2 px-2 py-1.5"
+                aria-label={`Abrir menú de ${user.name}`}
+              />
+            }
+          >
+            <Avatar size="sm">
+              {user.image ? (
+                <AvatarImage src={user.image} alt={user.name} />
+              ) : null}
+              <AvatarFallback>{getInitials(user.name)}</AvatarFallback>
+            </Avatar>
+            <span className="hidden min-w-0 text-left sm:grid">
+              <span className="max-w-36 truncate text-xs font-medium">
+                {user.name}
               </span>
-            </DropdownMenuLabel>
-          </DropdownMenuGroup>
-          <DropdownMenuSeparator />
-          <DropdownMenuGroup>
-            <DropdownMenuItem
-              disabled={isSigningOut}
-              onClick={handleSignOut}
-            >
-              {isSigningOut ? (
-                <LoaderCircleIcon
-                  data-icon="inline-start"
-                  className="animate-spin"
-                  aria-hidden="true"
-                />
-              ) : (
-                <LogOutIcon data-icon="inline-start" aria-hidden="true" />
-              )}
-              {isSigningOut ? "Cerrando sesión…" : "Cerrar sesión"}
-            </DropdownMenuItem>
-          </DropdownMenuGroup>
-        </DropdownMenuContent>
-      </DropdownMenu>
+              <span className="max-w-36 truncate text-[0.65rem] text-muted-foreground">
+                {roleLabels[user.role]}
+              </span>
+            </span>
+            <ChevronsUpDownIcon data-icon="inline-end" aria-hidden="true" />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-64">
+            <DropdownMenuGroup>
+              <DropdownMenuLabel className="font-normal">
+                <span className="flex min-w-0 flex-col gap-0.5">
+                  <span className="truncate text-sm font-medium text-foreground">
+                    {user.name}
+                  </span>
+                  <span className="truncate text-xs text-muted-foreground">
+                    {user.email}
+                  </span>
+                </span>
+              </DropdownMenuLabel>
+            </DropdownMenuGroup>
+            <DropdownMenuSeparator />
+            <DropdownMenuGroup>
+              <DropdownMenuItem
+                disabled={isSigningOut}
+                onClick={handleSignOut}
+              >
+                {isSigningOut ? (
+                  <LoaderCircleIcon
+                    data-icon="inline-start"
+                    className="animate-spin"
+                    aria-hidden="true"
+                  />
+                ) : (
+                  <LogOutIcon data-icon="inline-start" aria-hidden="true" />
+                )}
+                {isSigningOut ? "Cerrando sesión…" : "Cerrar sesión"}
+              </DropdownMenuItem>
+            </DropdownMenuGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
     </header>
   );
+}
+
+function capitalize(value: string) {
+  return value.charAt(0).toLocaleUpperCase("es-ES") + value.slice(1);
 }

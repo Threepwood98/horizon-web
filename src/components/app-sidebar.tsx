@@ -53,7 +53,6 @@ const navigation: readonly NavigationItem[] = [
     title: "Historial",
     href: "/history",
     icon: HistoryIcon,
-    roles: ["leader", "manager", "admin"],
   },
   {
     title: "Aprobaciones",

@@ -7,7 +7,11 @@ import {
   getTodayDate,
   parseDateOnly,
 } from "@/lib/domain";
-import { getReportEventScope, getReportScope } from "@/lib/report-scope";
+import {
+  getReportEventScope,
+  getReportManagementScope,
+  getReportScope,
+} from "@/lib/report-scope";
 
 export async function getDashboardData(user: CurrentUser) {
   const today = getTodayDate();
@@ -70,8 +74,7 @@ export async function getDashboardData(user: CurrentUser) {
 
 export async function getReportsData(user: CurrentUser) {
   const teamId = user.teamId ?? "__unassigned__";
-  const reportWhere =
-    user.role === "leader" ? { teamId } : { userId: user.id };
+  const reportWhere = getReportManagementScope(user);
   const [siteAccounts, reports, members] = await Promise.all([
     db.siteAccount.findMany({
       where: { teamId, website: { active: true } },
@@ -87,7 +90,6 @@ export async function getReportsData(user: CurrentUser) {
       take: 100,
       include: {
         user: { select: { name: true } },
-        createdBy: { select: { id: true, name: true } },
         website: { select: { name: true } },
       },
     }),
@@ -122,8 +124,6 @@ export async function getReportsData(user: CurrentUser) {
       endAmount: report.endAmount === null ? null : Number(report.endAmount),
       status: report.status,
       submissionOrigin: report.submissionOrigin,
-      createdBy:
-        report.createdById === report.userId ? null : report.createdBy,
       rejectionNote: report.rejectionNote,
     })),
   };
