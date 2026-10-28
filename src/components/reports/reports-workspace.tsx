@@ -1,6 +1,12 @@
 "use client";
 
-import { useActionState, useEffect, useRef, useState } from "react";
+import {
+  startTransition,
+  useActionState,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import {
   ArrowRightIcon,
   CalendarIcon,
@@ -19,7 +25,6 @@ import {
   submitReportsAction,
 } from "@/app/actions/reports";
 import {
-  ActionFeedback,
   formatReportDate,
   ReportStatusBadge,
 } from "@/components/reports/report-ui";
@@ -37,6 +42,15 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   Empty,
   EmptyDescription,
@@ -73,7 +87,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { initialActionState } from "@/lib/action-state";
+import { toast } from "@/components/ui/toast";
+import { initialActionState, type ActionState } from "@/lib/action-state";
 import { formatCurrency } from "@/lib/domain";
 import type { getReportsData } from "@/lib/queries";
 
@@ -84,6 +99,21 @@ const breakdownNumberFormatter = new Intl.NumberFormat("en-US", {
   minimumFractionDigits: 0,
   maximumFractionDigits: 2,
 });
+
+function showReportActionToast(
+  state: ActionState,
+  titles: { success: string; error: string },
+) {
+  if (state.status === "idle") {
+    return;
+  }
+
+  toast.add({
+    type: state.status,
+    title: titles[state.status],
+    description: state.message,
+  });
+}
 
 const reportTabs = [
   {
@@ -123,11 +153,10 @@ export function ReportsWorkspace({
   currentUserId: string;
   isLeader: boolean;
 }) {
-  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingReport, setEditingReport] = useState<Report | null>(null);
+  const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const editingReport = data.reports.find(
-    (report) => report.id === editingId && isEditable(report),
-  );
+  const editTriggerRef = useRef<HTMLButtonElement | null>(null);
   const editableReports = data.reports.filter(isEditable);
   const editableIdSet = new Set(editableReports.map((report) => report.id));
   const currentSelectedIds = selectedIds.filter((id) => editableIdSet.has(id));
@@ -154,16 +183,51 @@ export function ReportsWorkspace({
     );
   }
 
-  function startEditing(reportId: string) {
-    setEditingId(reportId);
+  function startEditing(reportId: string, trigger: HTMLButtonElement) {
+    const report = data.reports.find(
+      (candidate) => candidate.id === reportId && isEditable(candidate),
+    );
 
-    if (window.matchMedia("(max-width: 1279px)").matches) {
-      requestAnimationFrame(() => {
-        document
-          .getElementById("report-editor")
-          ?.scrollIntoView({ behavior: "smooth", block: "start" });
-      });
+    if (!report) {
+      return;
     }
+
+    editTriggerRef.current = trigger;
+    setEditingReport(report);
+    setEditDialogOpen(true);
+  }
+
+  function finishClosingEditDialog(open: boolean) {
+    if (!open) {
+      setEditingReport(null);
+    }
+  }
+
+  function getEditDialogFinalFocus() {
+    if (
+      editTriggerRef.current?.isConnected &&
+      editTriggerRef.current.getClientRects().length > 0
+    ) {
+      return editTriggerRef.current;
+    }
+
+    const visibleEditTrigger = Array.from(
+      document.querySelectorAll<HTMLButtonElement>("[data-report-edit]"),
+    ).find(
+      (trigger) =>
+        trigger.dataset.reportEdit === editingReport?.id &&
+        trigger.getClientRects().length > 0,
+    );
+
+    if (visibleEditTrigger) {
+      return visibleEditTrigger;
+    }
+
+    return (
+      document.querySelector<HTMLElement>(
+        `[data-report-tab="${editingReport?.status ?? "draft"}"]`,
+      ) ?? true
+    );
   }
 
   return (
@@ -193,15 +257,12 @@ export function ReportsWorkspace({
       </header>
 
       <div className="grid min-w-0 items-start gap-6 xl:grid-cols-[minmax(18rem,0.72fr)_minmax(0,1.55fr)]">
-        <ReportEditor
-          key={editingReport?.id ?? "new-report"}
-          report={editingReport}
+        <NewReportCard
           websites={data.websites}
           members={data.members}
           today={today}
           currentUserId={currentUserId}
           isLeader={isLeader}
-          onCancel={() => setEditingId(null)}
         />
 
         <ReportLedger
@@ -213,32 +274,246 @@ export function ReportsWorkspace({
           showMember={isLeader}
         />
       </div>
+
+      {editingReport ? (
+        <EditReportDialog
+          key={editingReport.id}
+          report={editingReport}
+          websites={data.websites}
+          members={data.members}
+          today={today}
+          currentUserId={currentUserId}
+          isLeader={isLeader}
+          open={editDialogOpen}
+          onOpenChange={setEditDialogOpen}
+          onOpenChangeComplete={finishClosingEditDialog}
+          onSaved={() => setEditDialogOpen(false)}
+          finalFocus={getEditDialogFinalFocus}
+        />
+      ) : null}
     </section>
   );
 }
 
-function ReportEditor({
+function NewReportCard({
+  websites,
+  members,
+  today,
+  currentUserId,
+  isLeader,
+}: {
+  websites: ReportsData["websites"];
+  members: ReportsData["members"];
+  today: string;
+  currentUserId: string;
+  isLeader: boolean;
+}) {
+  const formRef = useRef<HTMLFormElement>(null);
+  const [state, formAction, isPending] = useActionState(
+    async (previousState: ActionState, formData: FormData) => {
+      const nextState = await saveReportAction(previousState, formData);
+
+      showReportActionToast(nextState, {
+        success: "Borrador guardado",
+        error: "No se pudo guardar el borrador",
+      });
+
+      if (nextState.status === "success") {
+        formRef.current?.reset();
+      }
+
+      return nextState;
+    },
+    initialActionState,
+  );
+
+  return (
+    <Card className="xl:sticky xl:top-6">
+      <CardHeader>
+        <CardTitle>Nuevo reporte</CardTitle>
+        <CardDescription>
+          Registra la ganancia de un sitio. Podrás enviarla después.
+        </CardDescription>
+        <CardAction>
+          <Badge variant="outline">Borrador</Badge>
+        </CardAction>
+      </CardHeader>
+
+      <form
+        key="new-report-form"
+        ref={formRef}
+        action={formAction}
+        className="flex flex-col gap-4"
+      >
+        <CardContent className="flex flex-col gap-4">
+          <ReportFormFields
+            idPrefix="new-report"
+            state={state}
+            websites={websites}
+            members={members}
+            today={today}
+            currentUserId={currentUserId}
+            isLeader={isLeader}
+            isPending={isPending}
+          />
+        </CardContent>
+
+        <CardFooter className="justify-end gap-2">
+          <Button type="submit" disabled={isPending || websites.length === 0}>
+            {isPending ? (
+              <Spinner data-icon="inline-start" />
+            ) : (
+              <FilePlus2Icon data-icon="inline-start" />
+            )}
+            {isPending ? "Guardando..." : "Guardar borrador"}
+          </Button>
+        </CardFooter>
+      </form>
+    </Card>
+  );
+}
+
+function EditReportDialog({
   report,
   websites,
   members,
   today,
   currentUserId,
   isLeader,
-  onCancel,
+  open,
+  onOpenChange,
+  onOpenChangeComplete,
+  onSaved,
+  finalFocus,
 }: {
-  report: Report | undefined;
+  report: Report;
   websites: ReportsData["websites"];
   members: ReportsData["members"];
   today: string;
   currentUserId: string;
   isLeader: boolean;
-  onCancel: () => void;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onOpenChangeComplete: (open: boolean) => void;
+  onSaved: () => void;
+  finalFocus: () => HTMLElement | boolean;
 }) {
   const [state, formAction, isPending] = useActionState(
-    saveReportAction,
+    async (previousState: ActionState, formData: FormData) => {
+      const nextState = await saveReportAction(previousState, formData);
+
+      showReportActionToast(nextState, {
+        success: "Reporte actualizado",
+        error: "No se pudo actualizar el reporte",
+      });
+
+      if (nextState.status === "success") {
+        startTransition(onSaved);
+      }
+
+      return nextState;
+    },
     initialActionState,
   );
-  const formRef = useRef<HTMLFormElement>(null);
+  const formKey = `${report.id}:${report.userId}:${report.websiteId}:${report.date}:${report.amount}:${report.breakdown.join(",")}`;
+
+  function handleOpenChange(nextOpen: boolean) {
+    if (!nextOpen && isPending) {
+      return;
+    }
+
+    onOpenChange(nextOpen);
+  }
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={handleOpenChange}
+      onOpenChangeComplete={onOpenChangeComplete}
+    >
+      <DialogContent
+        className="max-h-[calc(100dvh-2rem)] grid-rows-[auto_minmax(0,1fr)] overflow-hidden sm:max-w-xl"
+        showCloseButton={!isPending}
+        finalFocus={finalFocus}
+      >
+        <DialogHeader className="pr-8">
+          <div className="flex flex-wrap items-center gap-2">
+            <DialogTitle>Editar reporte</DialogTitle>
+            <ReportStatusBadge status={report.status} />
+          </div>
+          <DialogDescription>
+            {report.status === "draft"
+              ? "Corrige o elimina las entradas que forman el importe total del borrador."
+              : "Al guardar, el reporte volverá a borrador y quedará listo para reenviar."}
+          </DialogDescription>
+        </DialogHeader>
+
+        <form
+          key={formKey}
+          action={formAction}
+          className="grid min-h-0 grid-rows-[minmax(0,1fr)_auto] gap-4"
+        >
+          <div className="-mx-1 flex min-h-0 flex-col gap-4 overflow-y-auto px-1 pb-1">
+            <ReportFormFields
+              idPrefix="edit-report"
+              report={report}
+              state={state}
+              websites={websites}
+              members={members}
+              today={today}
+              currentUserId={currentUserId}
+              isLeader={isLeader}
+              isPending={isPending}
+            />
+          </div>
+
+          <DialogFooter>
+            <DialogClose
+              render={
+                <Button type="button" variant="outline" disabled={isPending} />
+              }
+            >
+              Cancelar
+            </DialogClose>
+            <Button
+              type="submit"
+              disabled={isPending || websites.length === 0}
+            >
+              {isPending ? (
+                <Spinner data-icon="inline-start" />
+              ) : (
+                <FilePlus2Icon data-icon="inline-start" />
+              )}
+              {isPending ? "Guardando..." : "Guardar cambios"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function ReportFormFields({
+  idPrefix,
+  report,
+  state,
+  websites,
+  members,
+  today,
+  currentUserId,
+  isLeader,
+  isPending,
+}: {
+  idPrefix: string;
+  report?: Report;
+  state: ActionState;
+  websites: ReportsData["websites"];
+  members: ReportsData["members"];
+  today: string;
+  currentUserId: string;
+  isLeader: boolean;
+  isPending: boolean;
+}) {
   const ownerError = state.fieldErrors?.ownerId?.[0];
   const websiteError = state.fieldErrors?.websiteId?.[0];
   const dateError = state.fieldErrors?.date?.[0];
@@ -251,230 +526,175 @@ function ReportEditor({
     (members.some((member) => member.id === currentUserId)
       ? currentUserId
       : (members[0]?.id ?? ""));
-  const formKey = report
-    ? `${report.id}:${report.userId}:${report.websiteId}:${report.date}:${report.amount}:${report.breakdown.join(",")}`
-    : "new-report-form";
-
-  useEffect(() => {
-    if (state.status === "success" && !report) {
-      formRef.current?.reset();
-    }
-  }, [report, state]);
+  const ownerInputId = `${idPrefix}-owner`;
+  const ownerErrorId = `${ownerInputId}-error`;
+  const websiteInputId = `${idPrefix}-website`;
+  const websiteErrorId = `${websiteInputId}-error`;
+  const dateInputId = `${idPrefix}-date`;
+  const dateErrorId = `${dateInputId}-error`;
+  const amountInputId = `${idPrefix}-amount`;
+  const amountErrorId = `${amountInputId}-error`;
+  const entryAmountsErrorId = `${idPrefix}-entry-amounts-error`;
 
   return (
-    <Card id="report-editor" className="scroll-mt-4 xl:sticky xl:top-6">
-      <CardHeader>
-        <CardTitle>{report ? "Editar reporte" : "Nuevo reporte"}</CardTitle>
-        <CardDescription>
-          {editingDraft
-            ? "Corrige o elimina las entradas que forman el importe total del borrador."
-            : report
-              ? "Al guardar, el reporte volverá a borrador y quedará listo para reenviar."
-              : "Registra la ganancia de un sitio. Podrás enviarla después."}
-        </CardDescription>
-        <CardAction>
-          <Badge variant={report ? "secondary" : "outline"}>
-            {report ? "Edición" : "Borrador"}
-          </Badge>
-        </CardAction>
-      </CardHeader>
+    <>
+      {report ? (
+        <input type="hidden" name="reportId" value={report.id} />
+      ) : null}
 
-      <form
-        key={formKey}
-        ref={formRef}
-        action={formAction}
-        className="flex flex-col gap-4"
-      >
-        <CardContent className="flex flex-col gap-4">
-          {report ? (
-            <input type="hidden" name="reportId" value={report.id} />
-          ) : null}
+      {websites.length === 0 ? (
+        <Alert variant="destructive">
+          <WalletCardsIcon aria-hidden="true" />
+          <AlertTitle>No hay sitios disponibles</AlertTitle>
+          <AlertDescription>
+            Tu equipo necesita al menos un sitio activo antes de crear reportes.
+          </AlertDescription>
+        </Alert>
+      ) : null}
 
-          {websites.length === 0 ? (
-            <Alert variant="destructive">
-              <WalletCardsIcon aria-hidden="true" />
-              <AlertTitle>No hay sitios disponibles</AlertTitle>
-              <AlertDescription>
-                Tu equipo necesita al menos un sitio activo antes de crear
-                reportes.
-              </AlertDescription>
-            </Alert>
-          ) : null}
-
-          <FieldGroup className="grid gap-4 sm:grid-cols-2">
-            {isLeader ? (
-              <Field
-                className="sm:col-span-2"
-                data-disabled={report ? true : undefined}
-                data-invalid={ownerError ? true : undefined}
-              >
-                <FieldLabel htmlFor="report-owner">
-                  Reportar a nombre de
-                </FieldLabel>
-                {report ? (
-                  <input type="hidden" name="ownerId" value={report.userId} />
-                ) : null}
-                <NativeSelect
-                  id="report-owner"
-                  name={report ? undefined : "ownerId"}
-                  defaultValue={defaultOwnerId}
-                  required
-                  disabled={isPending || Boolean(report) || members.length === 0}
-                  aria-invalid={ownerError ? true : undefined}
-                  aria-describedby={
-                    ownerError ? "report-owner-error" : undefined
-                  }
-                  className="w-full"
-                >
-                  <NativeSelectOption value="" disabled>
-                    Selecciona un miembro
-                  </NativeSelectOption>
-                  {members.map((member) => (
-                    <NativeSelectOption key={member.id} value={member.id}>
-                      {member.name}
-                    </NativeSelectOption>
-                  ))}
-                </NativeSelect>
-                {report ? (
-                  <FieldDescription>
-                    El propietario de un reporte existente no se puede cambiar.
-                  </FieldDescription>
-                ) : null}
-                <FieldError id="report-owner-error">{ownerError}</FieldError>
-              </Field>
+      <FieldGroup className="grid gap-4 sm:grid-cols-2">
+        {isLeader ? (
+          <Field
+            className="sm:col-span-2"
+            data-disabled={report ? true : undefined}
+            data-invalid={ownerError ? true : undefined}
+          >
+            <FieldLabel htmlFor={ownerInputId}>
+              Reportar a nombre de
+            </FieldLabel>
+            {report ? (
+              <input type="hidden" name="ownerId" value={report.userId} />
             ) : null}
-
-            <Field
-              className="sm:col-span-2"
-              data-invalid={websiteError ? true : undefined}
+            <NativeSelect
+              id={ownerInputId}
+              name={report ? undefined : "ownerId"}
+              defaultValue={defaultOwnerId}
+              required
+              disabled={isPending || Boolean(report) || members.length === 0}
+              aria-invalid={ownerError ? true : undefined}
+              aria-describedby={ownerError ? ownerErrorId : undefined}
+              className="w-full"
             >
-              <FieldLabel htmlFor="report-website">Sitio</FieldLabel>
-              <NativeSelect
-                id="report-website"
-                name="websiteId"
-                defaultValue={report?.websiteId ?? ""}
-                required
-                disabled={isPending || websites.length === 0}
-                aria-invalid={websiteError ? true : undefined}
-                aria-describedby={
-                  websiteError ? "report-website-error" : undefined
-                }
-                className="w-full"
-              >
-                <NativeSelectOption value="" disabled>
-                  Selecciona un sitio
+              <NativeSelectOption value="" disabled>
+                Selecciona un miembro
+              </NativeSelectOption>
+              {members.map((member) => (
+                <NativeSelectOption key={member.id} value={member.id}>
+                  {member.name}
                 </NativeSelectOption>
-                {websites.map((website) => (
-                  <NativeSelectOption key={website.id} value={website.id}>
-                    {website.name}
-                  </NativeSelectOption>
-                ))}
-              </NativeSelect>
-              <FieldError id="report-website-error">{websiteError}</FieldError>
-            </Field>
-
-            {isLeader ? (
-              <Field
-                className={editingDraft ? "sm:col-span-2" : undefined}
-                data-invalid={dateError ? true : undefined}
-              >
-                <FieldLabel htmlFor="report-date">Fecha</FieldLabel>
-                <ReportDatePicker
-                  id="report-date"
-                  defaultValue={reportDate}
-                  maxValue={today}
-                  disabled={isPending}
-                  invalid={Boolean(dateError)}
-                  describedBy={dateError ? "report-date-error" : undefined}
-                />
-                <FieldError id="report-date-error">{dateError}</FieldError>
-              </Field>
+              ))}
+            </NativeSelect>
+            {report ? (
+              <FieldDescription>
+                El propietario de un reporte existente no se puede cambiar.
+              </FieldDescription>
             ) : null}
+            <FieldError id={ownerErrorId}>{ownerError}</FieldError>
+          </Field>
+        ) : null}
 
-            {editingDraft ? (
-              <FieldSet className="gap-3 sm:col-span-2">
-                <FieldLegend variant="label">Desglose (USD)</FieldLegend>
-                <FieldDescription>
-                  Modifica cada entrada o elimina las que no correspondan.
-                </FieldDescription>
-                <DraftBreakdownFields
-                  defaultValues={report.breakdown}
-                  disabled={isPending}
-                  invalid={Boolean(entryAmountsError)}
-                  describedBy={
-                    entryAmountsError ? "report-entry-amounts-error" : undefined
-                  }
-                />
-                <FieldError id="report-entry-amounts-error">
-                  {entryAmountsError}
-                </FieldError>
-              </FieldSet>
-            ) : (
-              <Field
-                className={!isLeader ? "sm:col-span-2" : undefined}
-                data-invalid={amountError ? true : undefined}
-              >
-                <FieldLabel htmlFor="report-amount">Importe (USD)</FieldLabel>
-                <Input
-                  id="report-amount"
-                  name="amount"
-                  type="number"
-                  inputMode="decimal"
-                  min="0.01"
-                  max="9999999999.99"
-                  step="0.01"
-                  defaultValue={report?.amount ?? ""}
-                  placeholder="0.00"
-                  required
-                  disabled={isPending}
-                  aria-invalid={amountError ? true : undefined}
-                  aria-describedby={
-                    amountError ? "report-amount-error" : undefined
-                  }
-                />
-                <FieldError id="report-amount-error">{amountError}</FieldError>
-              </Field>
-            )}
-          </FieldGroup>
+        <Field
+          className="sm:col-span-2"
+          data-invalid={websiteError ? true : undefined}
+        >
+          <FieldLabel htmlFor={websiteInputId}>Sitio</FieldLabel>
+          <NativeSelect
+            id={websiteInputId}
+            name="websiteId"
+            defaultValue={report?.websiteId ?? ""}
+            required
+            disabled={isPending || websites.length === 0}
+            aria-invalid={websiteError ? true : undefined}
+            aria-describedby={websiteError ? websiteErrorId : undefined}
+            className="w-full"
+          >
+            <NativeSelectOption value="" disabled>
+              Selecciona un sitio
+            </NativeSelectOption>
+            {websites.map((website) => (
+              <NativeSelectOption key={website.id} value={website.id}>
+                {website.name}
+              </NativeSelectOption>
+            ))}
+          </NativeSelect>
+          <FieldError id={websiteErrorId}>{websiteError}</FieldError>
+        </Field>
 
-          <ActionFeedback state={state} />
-        </CardContent>
-
-        <CardFooter className="justify-end gap-2">
-          {report ? (
-            <Button
-              type="button"
-              variant="outline"
-              onClick={onCancel}
+        {isLeader ? (
+          <Field
+            className={editingDraft ? "sm:col-span-2" : undefined}
+            data-invalid={dateError ? true : undefined}
+          >
+            <FieldLabel htmlFor={dateInputId}>Fecha</FieldLabel>
+            <ReportDatePicker
+              id={dateInputId}
+              defaultValue={reportDate}
+              maxValue={today}
               disabled={isPending}
-            >
-              Cancelar
-            </Button>
-          ) : null}
-          <Button type="submit" disabled={isPending || websites.length === 0}>
-            {isPending ? (
-              <Spinner data-icon="inline-start" />
-            ) : (
-              <FilePlus2Icon data-icon="inline-start" />
-            )}
-            {isPending
-              ? "Guardando..."
-              : report
-                ? "Guardar cambios"
-                : "Guardar borrador"}
-          </Button>
-        </CardFooter>
-      </form>
-    </Card>
+              invalid={Boolean(dateError)}
+              describedBy={dateError ? dateErrorId : undefined}
+            />
+            <FieldError id={dateErrorId}>{dateError}</FieldError>
+          </Field>
+        ) : null}
+
+        {editingDraft ? (
+          <FieldSet className="gap-3 sm:col-span-2">
+            <FieldLegend variant="label">Desglose (USD)</FieldLegend>
+            <FieldDescription>
+              Modifica cada entrada o elimina las que no correspondan.
+            </FieldDescription>
+            <DraftBreakdownFields
+              idPrefix={idPrefix}
+              defaultValues={report.breakdown}
+              disabled={isPending}
+              invalid={Boolean(entryAmountsError)}
+              describedBy={
+                entryAmountsError ? entryAmountsErrorId : undefined
+              }
+            />
+            <FieldError id={entryAmountsErrorId}>
+              {entryAmountsError}
+            </FieldError>
+          </FieldSet>
+        ) : (
+          <Field
+            className={!isLeader ? "sm:col-span-2" : undefined}
+            data-invalid={amountError ? true : undefined}
+          >
+            <FieldLabel htmlFor={amountInputId}>Importe (USD)</FieldLabel>
+            <Input
+              id={amountInputId}
+              name="amount"
+              type="number"
+              inputMode="decimal"
+              min="0.01"
+              max="9999999999.99"
+              step="0.01"
+              defaultValue={report?.amount ?? ""}
+              placeholder="0.00"
+              required
+              disabled={isPending}
+              aria-invalid={amountError ? true : undefined}
+              aria-describedby={amountError ? amountErrorId : undefined}
+            />
+            <FieldError id={amountErrorId}>{amountError}</FieldError>
+          </Field>
+        )}
+      </FieldGroup>
+
+    </>
   );
 }
 
 function DraftBreakdownFields({
+  idPrefix,
   defaultValues,
   disabled,
   invalid,
   describedBy,
 }: {
+  idPrefix: string;
   defaultValues: number[];
   disabled: boolean;
   invalid: boolean;
@@ -508,7 +728,7 @@ function DraftBreakdownFields({
   return (
     <div className="flex flex-col gap-3">
       {entries.map((entry, index) => {
-        const inputId = `report-entry-${entry.id}`;
+        const inputId = `${idPrefix}-entry-${entry.id}`;
 
         return (
           <Field key={entry.id} data-invalid={invalid || undefined}>
@@ -657,11 +877,20 @@ function ReportLedger({
   selectedIds: string[];
   onToggle: (reportId: string, checked: boolean) => void;
   onToggleAll: (reportIds: string[], checked: boolean) => void;
-  onEdit: (reportId: string) => void;
+  onEdit: (reportId: string, trigger: HTMLButtonElement) => void;
   showMember: boolean;
 }) {
-  const [deleteState, deleteFormAction, deletePending] = useActionState(
-    deleteReportAction,
+  const [, deleteFormAction, deletePending] = useActionState(
+    async (previousState: ActionState, formData: FormData) => {
+      const nextState = await deleteReportAction(previousState, formData);
+
+      showReportActionToast(nextState, {
+        success: "Reporte eliminado",
+        error: "No se pudo eliminar el reporte",
+      });
+
+      return nextState;
+    },
     initialActionState,
   );
   const selectedSet = new Set(selectedIds);
@@ -680,14 +909,17 @@ function ReportLedger({
       </CardHeader>
 
       <CardContent className="flex min-w-0 flex-col gap-4">
-        <ActionFeedback state={deleteState} />
         <form id="delete-report-form" action={deleteFormAction} />
 
         <Tabs defaultValue="draft" className="min-w-0">
           <div className="overflow-x-auto pb-1">
             <TabsList variant="line" className="min-w-max">
               {reportTabs.map((tab) => (
-                <TabsTrigger key={tab.value} value={tab.value}>
+                <TabsTrigger
+                  key={tab.value}
+                  value={tab.value}
+                  data-report-tab={tab.value}
+                >
                   {tab.label}
                   <Badge variant="secondary">
                     {
@@ -757,7 +989,7 @@ function ReportStatusPanel({
   showRegistration: boolean;
   onToggle: (reportId: string, checked: boolean) => void;
   onToggleAll: (reportIds: string[], checked: boolean) => void;
-  onEdit: (reportId: string) => void;
+  onEdit: (reportId: string, trigger: HTMLButtonElement) => void;
   showMember: boolean;
 }) {
   const editableIds = reports.filter(isEditable).map((report) => report.id);
@@ -865,7 +1097,10 @@ function ReportStatusPanel({
                         type="button"
                         size="sm"
                         variant="outline"
-                        onClick={() => onEdit(report.id)}
+                        data-report-edit={report.id}
+                        onClick={(event) =>
+                          onEdit(report.id, event.currentTarget)
+                        }
                       >
                         <PencilIcon data-icon="inline-start" />
                         Editar
@@ -917,8 +1152,17 @@ function ReportStatusPanel({
 }
 
 function SubmitReportsForm({ reportIds }: { reportIds: string[] }) {
-  const [state, formAction, isPending] = useActionState(
-    submitReportsAction,
+  const [, formAction, isPending] = useActionState(
+    async (previousState: ActionState, formData: FormData) => {
+      const nextState = await submitReportsAction(previousState, formData);
+
+      showReportActionToast(nextState, {
+        success: "Envío completado",
+        error: "No se pudieron enviar los reportes",
+      });
+
+      return nextState;
+    },
     initialActionState,
   );
 
@@ -950,7 +1194,6 @@ function SubmitReportsForm({ reportIds }: { reportIds: string[] }) {
           {isPending ? "Enviando..." : "Enviar a revisión"}
         </Button>
       </form>
-      <ActionFeedback state={state} />
     </div>
   );
 }
@@ -967,7 +1210,7 @@ function ReportMobileCard({
   selected: boolean;
   deletePending: boolean;
   onToggle: (reportId: string, checked: boolean) => void;
-  onEdit: (reportId: string) => void;
+  onEdit: (reportId: string, trigger: HTMLButtonElement) => void;
   showMember: boolean;
 }) {
   return (
@@ -1015,7 +1258,8 @@ function ReportMobileCard({
             type="button"
             size="sm"
             variant="outline"
-            onClick={() => onEdit(report.id)}
+            data-report-edit={report.id}
+            onClick={(event) => onEdit(report.id, event.currentTarget)}
           >
             <PencilIcon data-icon="inline-start" />
             Editar
