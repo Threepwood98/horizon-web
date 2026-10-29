@@ -97,7 +97,7 @@ export async function getReportsData(user: CurrentUser) {
       ? db.user.findMany({
           where: { teamId },
           orderBy: [{ name: "asc" }, { id: "asc" }],
-          select: { id: true, name: true },
+          select: { id: true, name: true, role: true },
         })
       : Promise.resolve([]),
   ]);

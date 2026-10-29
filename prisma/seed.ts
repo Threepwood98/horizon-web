@@ -669,7 +669,7 @@ function buildDemoReports(): DemoReportFixture[] {
       id: "demo-report-ana-draft",
       owner: "userAlpha",
       team: "alpha",
-      website: "orion",
+      website: "nova",
       date: dates.today,
       amount: "15.00",
       breakdown: ["10.00", "5.00"],

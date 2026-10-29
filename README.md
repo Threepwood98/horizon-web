@@ -58,7 +58,7 @@ Rerunning the seed signs out all demo users and removes reports created with tho
 ## Roles
 
 - `user`: creates, edits, submits, and follows the active reports they created, plus the audit history of every report owned by them.
-- `leader`: can create and manage reports for any member of the assigned team, reviews that team's submitted reports, and sees its audit history.
+- `leader`: creates and manages their own reports, can explicitly complete and exclusively manage a missing report for an ordinary user on the assigned team, reviews that team's submitted reports, and sees its audit history.
 - `manager`: sees the global report history and consolidated statistics, and configures teams, sites, and site accounts.
 - `admin`: has manager capabilities and controls user roles and assignments.
 
@@ -66,13 +66,14 @@ Permissions are enforced again in Server Actions and scoped database queries; hi
 
 ## Report lifecycle
 
-1. A user saves a `draft` for a site enabled on their current team.
-2. Additional entries from the same creator for the same member, site, and date are added to that draft and retained as an editable breakdown. A report created by a leader never merges with one created by its owner.
-3. Only the immutable creator can see and manage a report in the active reports workspace throughout its lifecycle (`draft`, `sent`, and `rejected`). Drafts or corrected rejections are submitted manually as `sent`; team submissions remain visible to the leader in the approval queue.
-4. At the start of a new business day, every older `draft` is submitted automatically. Rejected reports remain rejected until a user or leader corrects and submits them.
-5. The team's leader accepts or rejects a selection.
-6. Acceptance records immutable start/end balance snapshots in deterministic creation order.
-7. Rejection stores one review note on every selected report. Corrections keep the same report identity, and each later submission opens another review cycle.
+1. A user or leader saves their own `draft` for a site enabled on their current team. A leader uses the separate **Completar reporte faltante** action when an ordinary user omitted a report.
+2. A new backfill is rejected if any report already exists for the selected owner, site, and date, regardless of status or creator. Existing historical duplicates are preserved.
+3. Additional entries from the same creator for the same member, site, and date are added to that draft and retained as an editable breakdown.
+4. Only the immutable creator can see and manage a report in the active reports workspace throughout its lifecycle (`draft`, `sent`, and `rejected`). A user cannot edit, delete, or submit a report created for them by a leader; they see it only in `Historial`. Drafts or corrected rejections are submitted manually as `sent`; team submissions remain visible to the leader in the approval queue.
+5. At the start of a new business day, every older `draft` is submitted automatically. Rejected reports remain rejected until their creator corrects and submits them.
+6. The team's leader accepts or rejects a selection.
+7. Acceptance records immutable start/end balance snapshots in deterministic creation order.
+8. Rejection stores one review note on every selected report. Corrections keep the same report identity, and each later submission opens another review cycle.
 
 Every creation, added entry, edit, merge, submission, review, and deletion appends an immutable snapshot to `Historial`. These events survive report deletion. Users see events for reports owned by them, including reports created on their behalf by a leader; leaders see their team's log, while managers and administrators see the global log.
 

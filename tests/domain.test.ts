@@ -16,6 +16,7 @@ import {
   MAXIMUM_REPORT_AMOUNT,
   sumReportAmounts,
 } from "../src/lib/report-breakdown";
+import { assertReportCreationAllowed } from "../src/lib/report-creation-policy";
 import { assertReportDateAllowed } from "../src/lib/report-date-policy";
 import { getSubmissionEventType } from "../src/lib/report-events";
 import {
@@ -113,6 +114,106 @@ test("active report management follows the immutable creator", () => {
   assert.deepEqual(getReportManagementScope({ ...baseUser, role: "admin" }), {
     id: { in: [] },
   });
+});
+
+test("standard report creation cannot be delegated", () => {
+  assert.doesNotThrow(() =>
+    assertReportCreationAllowed({
+      role: "user",
+      actorId: "user-1",
+      ownerId: "user-1",
+      intent: "standard",
+      editing: false,
+    }),
+  );
+  assert.doesNotThrow(() =>
+    assertReportCreationAllowed({
+      role: "leader",
+      actorId: "leader-1",
+      ownerId: "leader-1",
+      intent: "standard",
+      editing: false,
+    }),
+  );
+  assert.throws(
+    () =>
+      assertReportCreationAllowed({
+        role: "leader",
+        actorId: "leader-1",
+        ownerId: "user-1",
+        intent: "standard",
+        editing: false,
+      }),
+    /Completar reporte faltante/,
+  );
+});
+
+test("only leaders can backfill another user's missing report", () => {
+  assert.doesNotThrow(() =>
+    assertReportCreationAllowed({
+      role: "leader",
+      actorId: "leader-1",
+      ownerId: "user-1",
+      intent: "backfill",
+      editing: false,
+    }),
+  );
+  assert.throws(
+    () =>
+      assertReportCreationAllowed({
+        role: "leader",
+        actorId: "leader-1",
+        ownerId: "leader-1",
+        intent: "backfill",
+        editing: false,
+      }),
+    /Nuevo reporte/,
+  );
+  assert.throws(
+    () =>
+      assertReportCreationAllowed({
+        role: "user",
+        actorId: "user-1",
+        ownerId: "user-2",
+        intent: "backfill",
+        editing: false,
+      }),
+    /Solo un líder/,
+  );
+});
+
+test("editing preserves the immutable creation intent", () => {
+  assert.doesNotThrow(() =>
+    assertReportCreationAllowed({
+      role: "leader",
+      actorId: "leader-1",
+      ownerId: "user-1",
+      intent: "standard",
+      editing: true,
+    }),
+  );
+  assert.throws(
+    () =>
+      assertReportCreationAllowed({
+        role: "leader",
+        actorId: "leader-1",
+        ownerId: "user-1",
+        intent: "backfill",
+        editing: true,
+      }),
+    /tipo de un reporte existente/,
+  );
+  assert.throws(
+    () =>
+      assertReportCreationAllowed({
+        role: "manager",
+        actorId: "manager-1",
+        ownerId: "user-1",
+        intent: "standard",
+        editing: true,
+      }),
+    /No puedes crear reportes/,
+  );
 });
 
 test("submission events distinguish the first and later review cycles", () => {

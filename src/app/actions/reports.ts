@@ -24,6 +24,10 @@ import {
   MAXIMUM_REPORT_AMOUNT,
   sumReportAmounts,
 } from "@/lib/report-breakdown";
+import {
+  assertReportCreationAllowed,
+  REPORT_CREATION_INTENTS,
+} from "@/lib/report-creation-policy";
 import { assertReportDateAllowed } from "@/lib/report-date-policy";
 import {
   buildReportEvent,
@@ -40,6 +44,7 @@ const amountSchema = z
 
 const reportDetailsSchema = z.object({
   reportId: z.string().optional(),
+  intent: z.enum(REPORT_CREATION_INTENTS).default("standard"),
   ownerId: z.string().optional(),
   websiteId: z.string().min(1, "Selecciona un sitio."),
   date: z
@@ -62,6 +67,7 @@ export async function saveReportAction(
     const user = await requireCurrentUser(["user", "leader"]);
     const parsed = reportDetailsSchema.safeParse({
       reportId: getFormString(formData, "reportId") || undefined,
+      intent: getFormString(formData, "intent") || undefined,
       ownerId:
         user.role === "leader"
           ? getFormString(formData, "ownerId") || undefined
@@ -122,6 +128,14 @@ export async function saveReportAction(
         fieldErrors: { ownerId: ["Selecciona un miembro del equipo."] },
       };
     }
+    assertReportCreationAllowed({
+      role: user.role,
+      actorId: user.id,
+      ownerId,
+      intent: parsed.data.intent,
+      editing: Boolean(editableReport),
+    });
+    const isBackfill = parsed.data.intent === "backfill";
 
     const breakdownResult = editableReport?.status === "draft"
       ? breakdownSchema.safeParse(getRawFormStrings(formData, "entryAmounts"))
@@ -191,7 +205,7 @@ export async function saveReportAction(
       async (transaction) => {
         const owner = await transaction.user.findFirst({
           where: { id: ownerId, teamId: user.teamId! },
-          select: { id: true },
+          select: { id: true, role: true },
         });
         const siteAccount = await transaction.siteAccount.findUnique({
           where: {
@@ -209,8 +223,32 @@ export async function saveReportAction(
           );
         }
 
+        if (isBackfill && owner.role !== "user") {
+          throw new DomainError(
+            "Solo puedes completar reportes faltantes de usuarios de tu equipo.",
+          );
+        }
+
         if (!siteAccount || !siteAccount.website.active) {
           throw new DomainError("El sitio no está habilitado para tu equipo.");
+        }
+
+        if (isBackfill) {
+          const existingReport = await transaction.report.findFirst({
+            where: {
+              userId: ownerId,
+              teamId: user.teamId!,
+              websiteId: parsed.data.websiteId,
+              date: reportDate,
+            },
+            select: { id: true },
+          });
+
+          if (existingReport) {
+            throw new DomainError(
+              "Ya existe un reporte para este miembro, sitio y fecha.",
+            );
+          }
         }
 
         if (parsed.data.reportId) {
@@ -362,19 +400,30 @@ export async function saveReportAction(
           return true;
         }
 
-        const savedReport = await transaction.report.create({
-          data: {
-            userId: ownerId,
-            createdById: creatorId,
-            teamId: user.teamId!,
-            websiteId: parsed.data.websiteId,
-            date: reportDate,
-            amount: totalAmount,
-            breakdown: entryAmounts,
-            draftKey,
-          },
-          select: reportEventSnapshotSelect,
-        });
+        let savedReport;
+        try {
+          savedReport = await transaction.report.create({
+            data: {
+              userId: ownerId,
+              createdById: creatorId,
+              teamId: user.teamId!,
+              websiteId: parsed.data.websiteId,
+              date: reportDate,
+              amount: totalAmount,
+              breakdown: entryAmounts,
+              draftKey,
+            },
+            select: reportEventSnapshotSelect,
+          });
+        } catch (error) {
+          if (isBackfill && isPrismaError(error, "P2002")) {
+            throw new DomainError(
+              "Ya existe un reporte para este miembro, sitio y fecha.",
+            );
+          }
+
+          throw error;
+        }
         await transaction.reportEvent.create({
           data: buildReportEvent(savedReport, {
             type: "created",
@@ -386,6 +435,9 @@ export async function saveReportAction(
     );
 
     revalidateReportViews();
+    if (isBackfill) {
+      return actionSuccess("Reporte faltante guardado como borrador.");
+    }
     if (parsed.data.reportId) {
       return actionSuccess(
         mergedExistingDraft ? "Borradores combinados." : "Borrador actualizado.",
@@ -720,6 +772,15 @@ function assertAggregateFits(
   if ((currentAmount ?? new Prisma.Decimal(0)).plus(addedAmount).greaterThan(MAXIMUM_REPORT_AMOUNT)) {
     throw new DomainError("El importe total del borrador supera 9,999,999,999.99 USD.");
   }
+}
+
+function isPrismaError(error: unknown, code: string) {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === code
+  );
 }
 
 function revalidateReportViews() {

@@ -40,8 +40,8 @@ El identificador para iniciar sesión es el correo electrónico; la aplicación 
 - Legacy está inactivo, pero conserva historial aceptado para las estadísticas.
 - Unlinked está activo y no tiene ninguna cuenta de equipo.
 - Los reportes cubren los estados `draft`, `sent`, `accepted` y `rejected`.
-- Ana tiene dos borradores de Orion para la fecha actual: uno propio de `$9` y otro creado por Leo con el desglose `10 + 5 = 15`; permanecen separados por creador.
-- El borrador creado por Leo aparece solamente en el espacio de reportes de Leo; su nombre se muestra como atribución delegada únicamente en Historial.
+- Ana tiene un borrador propio de Orion por `$9` y un borrador faltante de Nova creado por Leo con el desglose `10 + 5 = 15`, ambos para la fecha actual.
+- El borrador de Nova creado por Leo aparece solamente en el espacio de reportes de Leo; su nombre se muestra como atribución delegada únicamente en Historial.
 - El reporte pendiente de Ana en Orion muestra la etiqueta de envío automático.
 - El historial incluye un ciclo completo de envío, rechazo, corrección, reenvío y aceptación.
 - Los borradores usan la fecha civil actual para que el job diario no los envíe inmediatamente después de restaurar el fixture.
@@ -52,13 +52,13 @@ El identificador para iniciar sesión es el correo electrónico; la aplicación 
 
 ### Usuario
 
-Inicia sesión como Ana para crear, editar, eliminar y enviar sus propios borradores. El borrador creado por Leo no aparece en sus reportes y tampoco puede gestionarlo, pero Historial sí muestra sus eventos porque está a nombre de Ana, con Leo identificado como creador. El formulario nuevo no muestra una fecha y el servidor utiliza el día actual.
+Inicia sesión como Ana para crear, editar, eliminar y enviar sus propios borradores. El borrador de Nova creado por Leo no aparece en sus reportes y tampoco puede gestionarlo, pero Historial sí muestra sus eventos porque está a nombre de Ana, con Leo identificado como creador. El formulario nuevo no muestra una fecha y el servidor utiliza el día actual.
 
 Inicia sesión como Usuario Sin Equipo para comprobar el estado vacío cuando no hay equipo ni sitios disponibles.
 
 ### Líder
 
-Inicia sesión como Leo para registrar y gestionar reportes en fechas anteriores y a nombre de cualquier integrante de Alpha. Su espacio de reportes incluye el borrador delegado de Ana, mientras que los borradores creados por los integrantes permanecen en sus propios espacios. Historial muestra todos los eventos de Alpha, incluido un reporte con dos ciclos de revisión. La cola pendiente incluye reportes de Ana, Mia y Leo en Orion y Nova, lo que permite probar aceptación y rechazo por lotes.
+Inicia sesión como Leo para crear reportes propios desde **Nuevo reporte** y usar **Completar reporte faltante** para usuarios de Alpha. Su espacio de reportes incluye el borrador delegado de Ana en Nova, mientras que los borradores creados por los integrantes permanecen en sus propios espacios. Intenta completar nuevamente Ana/Nova en la fecha actual para comprobar el rechazo por duplicado. Historial muestra todos los eventos de Alpha, incluido un reporte con dos ciclos de revisión. La cola pendiente incluye reportes de Ana, Mia y Leo en Orion y Nova, lo que permite probar aceptación y rechazo por lotes.
 
 Utiliza los filtros de estadísticas para comparar integrantes y sitios de Alpha.
 

@@ -10,10 +10,12 @@ import {
 import {
   ArrowRightIcon,
   CalendarIcon,
+  CalendarPlus2Icon,
   FilePlus2Icon,
   FilesIcon,
   PencilIcon,
   SendIcon,
+  ShieldCheckIcon,
   Trash2Icon,
   WalletCardsIcon,
 } from "lucide-react";
@@ -50,6 +52,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  DialogTrigger,
 } from "@/components/ui/dialog";
 import {
   Empty,
@@ -90,6 +93,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "@/components/ui/toast";
 import { initialActionState, type ActionState } from "@/lib/action-state";
 import { formatCurrency } from "@/lib/domain";
+import type { ReportCreationIntent } from "@/lib/report-creation-policy";
 import type { getReportsData } from "@/lib/queries";
 
 type ReportsData = Awaited<ReturnType<typeof getReportsData>>;
@@ -245,14 +249,24 @@ export function ReportsWorkspace({
             listos para revisión.
           </p>
         </div>
-        <div
-          className="flex flex-wrap gap-2 sm:justify-end"
-          role="group"
-          aria-label="Resumen de reportes"
-        >
-          <Badge variant="outline">{editableReports.length} editables</Badge>
-          <Badge variant="secondary">{pendingCount} pendientes</Badge>
-          <Badge variant="outline">{data.reports.length} recientes</Badge>
+        <div className="flex flex-col gap-3 sm:items-end">
+          {isLeader ? (
+            <MissingReportDialog
+              websites={data.websites}
+              members={data.members}
+              today={today}
+              currentUserId={currentUserId}
+            />
+          ) : null}
+          <div
+            className="flex flex-wrap gap-2 sm:justify-end"
+            role="group"
+            aria-label="Resumen de reportes"
+          >
+            <Badge variant="outline">{editableReports.length} editables</Badge>
+            <Badge variant="secondary">{pendingCount} pendientes</Badge>
+            <Badge variant="outline">{data.reports.length} recientes</Badge>
+          </div>
         </div>
       </header>
 
@@ -332,7 +346,9 @@ function NewReportCard({
       <CardHeader>
         <CardTitle>Nuevo reporte</CardTitle>
         <CardDescription>
-          Registra la ganancia de un sitio. Podrás enviarla después.
+          {isLeader
+            ? "Registra tus propias ganancias. Podrás enviarlas después."
+            : "Registra la ganancia de un sitio. Podrás enviarla después."}
         </CardDescription>
         <CardAction>
           <Badge variant="outline">Borrador</Badge>
@@ -370,6 +386,193 @@ function NewReportCard({
         </CardFooter>
       </form>
     </Card>
+  );
+}
+
+function MissingReportDialog({
+  websites,
+  members,
+  today,
+  currentUserId,
+}: {
+  websites: ReportsData["websites"];
+  members: ReportsData["members"];
+  today: string;
+  currentUserId: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [sessionKey, setSessionKey] = useState(0);
+  const [isPending, setIsPending] = useState(false);
+  const eligibleMembers = members.filter(
+    (member) => member.role === "user" && member.id !== currentUserId,
+  );
+
+  function handleOpenChange(nextOpen: boolean) {
+    if (!nextOpen && isPending) {
+      return;
+    }
+
+    setOpen(nextOpen);
+  }
+
+  function handleOpenChangeComplete(nextOpen: boolean) {
+    if (!nextOpen) {
+      setIsPending(false);
+      setSessionKey((current) => current + 1);
+    }
+  }
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={handleOpenChange}
+      onOpenChangeComplete={handleOpenChangeComplete}
+    >
+      <DialogTrigger
+        render={
+          <Button
+            type="button"
+            variant="outline"
+            className="w-full sm:w-auto"
+          />
+        }
+      >
+        <CalendarPlus2Icon data-icon="inline-start" aria-hidden="true" />
+        Completar reporte faltante
+      </DialogTrigger>
+
+      <MissingReportDialogContent
+        key={sessionKey}
+        websites={websites}
+        members={eligibleMembers}
+        today={today}
+        currentUserId={currentUserId}
+        onPendingChange={setIsPending}
+        onSaved={() => setOpen(false)}
+      />
+    </Dialog>
+  );
+}
+
+function MissingReportDialogContent({
+  websites,
+  members,
+  today,
+  currentUserId,
+  onPendingChange,
+  onSaved,
+}: {
+  websites: ReportsData["websites"];
+  members: ReportsData["members"];
+  today: string;
+  currentUserId: string;
+  onPendingChange: (pending: boolean) => void;
+  onSaved: () => void;
+}) {
+  const formRef = useRef<HTMLFormElement>(null);
+  const [state, formAction, isPending] = useActionState(
+    async (previousState: ActionState, formData: FormData) => {
+      const nextState = await saveReportAction(previousState, formData);
+
+      showReportActionToast(nextState, {
+        success: "Reporte faltante guardado",
+        error: "No se pudo completar el reporte faltante",
+      });
+
+      if (nextState.status === "success") {
+        formRef.current?.reset();
+        startTransition(onSaved);
+      }
+
+      return nextState;
+    },
+    initialActionState,
+  );
+
+  useEffect(() => {
+    onPendingChange(isPending);
+
+    return () => onPendingChange(false);
+  }, [isPending, onPendingChange]);
+
+  return (
+    <DialogContent
+      className="max-h-[calc(100dvh-2rem)] grid-rows-[auto_minmax(0,1fr)] overflow-hidden sm:max-w-xl"
+      showCloseButton={!isPending}
+    >
+      <DialogHeader className="pr-8">
+        <div className="flex flex-wrap items-center gap-2">
+          <DialogTitle>Completar reporte faltante</DialogTitle>
+          <Badge variant="secondary">Registro delegado</Badge>
+        </div>
+        <DialogDescription>
+          Registra una ganancia que un usuario del equipo olvidó reportar.
+        </DialogDescription>
+      </DialogHeader>
+
+      <form
+        ref={formRef}
+        action={formAction}
+        className="grid min-h-0 grid-rows-[minmax(0,1fr)_auto] gap-4"
+      >
+        <div className="-mx-1 flex min-h-0 flex-col gap-4 overflow-y-auto px-1 pb-1">
+          <Alert>
+            <ShieldCheckIcon aria-hidden="true" />
+            <AlertTitle>Gestión protegida</AlertTitle>
+            <AlertDescription>
+              El usuario lo verá en Historial, pero solo tú podrás gestionarlo,
+              corregirlo y enviarlo.
+            </AlertDescription>
+          </Alert>
+
+          {members.length === 0 ? (
+            <Alert variant="destructive">
+              <CalendarPlus2Icon aria-hidden="true" />
+              <AlertTitle>No hay usuarios disponibles</AlertTitle>
+              <AlertDescription>
+                El equipo necesita al menos un usuario para completar un
+                reporte faltante.
+              </AlertDescription>
+            </Alert>
+          ) : null}
+
+          <ReportFormFields
+            idPrefix="missing-report"
+            creationIntent="backfill"
+            state={state}
+            websites={websites}
+            members={members}
+            today={today}
+            currentUserId={currentUserId}
+            isLeader
+            isPending={isPending}
+          />
+        </div>
+
+        <DialogFooter>
+          <DialogClose
+            render={
+              <Button type="button" variant="outline" disabled={isPending} />
+            }
+          >
+            Cancelar
+          </DialogClose>
+          <Button
+            type="submit"
+            disabled={
+              isPending || websites.length === 0 || members.length === 0
+            }
+          >
+            {isPending ? (
+              <Spinner data-icon="inline-start" />
+            ) : (
+              <CalendarPlus2Icon data-icon="inline-start" />
+            )}
+            {isPending ? "Guardando..." : "Guardar como borrador"}
+          </Button>
+        </DialogFooter>
+      </form>
+    </DialogContent>
   );
 }
 
@@ -495,6 +698,7 @@ function EditReportDialog({
 
 function ReportFormFields({
   idPrefix,
+  creationIntent = "standard",
   report,
   state,
   websites,
@@ -505,6 +709,7 @@ function ReportFormFields({
   isPending,
 }: {
   idPrefix: string;
+  creationIntent?: ReportCreationIntent;
   report?: Report;
   state: ActionState;
   websites: ReportsData["websites"];
@@ -520,12 +725,19 @@ function ReportFormFields({
   const amountError = state.fieldErrors?.amount?.[0];
   const entryAmountsError = state.fieldErrors?.entryAmounts?.[0];
   const editingDraft = report?.status === "draft";
+  const isBackfill = creationIntent === "backfill";
+  const showOwnerField = isLeader && (Boolean(report) || isBackfill);
+  const ownerOptions = isBackfill
+    ? members.filter((member) => member.role === "user")
+    : members;
   const reportDate = report?.date ?? today;
   const defaultOwnerId =
     report?.userId ??
-    (members.some((member) => member.id === currentUserId)
-      ? currentUserId
-      : (members[0]?.id ?? ""));
+    (isBackfill
+      ? ""
+      : members.some((member) => member.id === currentUserId)
+        ? currentUserId
+        : (members[0]?.id ?? currentUserId));
   const ownerInputId = `${idPrefix}-owner`;
   const ownerErrorId = `${ownerInputId}-error`;
   const websiteInputId = `${idPrefix}-website`;
@@ -538,8 +750,12 @@ function ReportFormFields({
 
   return (
     <>
+      <input type="hidden" name="intent" value={creationIntent} />
       {report ? (
         <input type="hidden" name="reportId" value={report.id} />
+      ) : null}
+      {isLeader && !report && !isBackfill ? (
+        <input type="hidden" name="ownerId" value={currentUserId} />
       ) : null}
 
       {websites.length === 0 ? (
@@ -553,14 +769,18 @@ function ReportFormFields({
       ) : null}
 
       <FieldGroup className="grid gap-4 sm:grid-cols-2">
-        {isLeader ? (
+        {showOwnerField ? (
           <Field
             className="sm:col-span-2"
-            data-disabled={report ? true : undefined}
+            data-disabled={
+              report || isPending || ownerOptions.length === 0
+                ? true
+                : undefined
+            }
             data-invalid={ownerError ? true : undefined}
           >
             <FieldLabel htmlFor={ownerInputId}>
-              Reportar a nombre de
+              {isBackfill ? "Miembro con reporte faltante" : "Miembro"}
             </FieldLabel>
             {report ? (
               <input type="hidden" name="ownerId" value={report.userId} />
@@ -570,7 +790,9 @@ function ReportFormFields({
               name={report ? undefined : "ownerId"}
               defaultValue={defaultOwnerId}
               required
-              disabled={isPending || Boolean(report) || members.length === 0}
+              disabled={
+                isPending || Boolean(report) || ownerOptions.length === 0
+              }
               aria-invalid={ownerError ? true : undefined}
               aria-describedby={ownerError ? ownerErrorId : undefined}
               className="w-full"
@@ -578,7 +800,7 @@ function ReportFormFields({
               <NativeSelectOption value="" disabled>
                 Selecciona un miembro
               </NativeSelectOption>
-              {members.map((member) => (
+              {ownerOptions.map((member) => (
                 <NativeSelectOption key={member.id} value={member.id}>
                   {member.name}
                 </NativeSelectOption>
@@ -587,6 +809,11 @@ function ReportFormFields({
             {report ? (
               <FieldDescription>
                 El propietario de un reporte existente no se puede cambiar.
+              </FieldDescription>
+            ) : isBackfill ? (
+              <FieldDescription>
+                Solo se muestran usuarios del equipo; el reporte permanecerá
+                bajo tu gestión.
               </FieldDescription>
             ) : null}
             <FieldError id={ownerErrorId}>{ownerError}</FieldError>
@@ -625,7 +852,9 @@ function ReportFormFields({
             className={editingDraft ? "sm:col-span-2" : undefined}
             data-invalid={dateError ? true : undefined}
           >
-            <FieldLabel htmlFor={dateInputId}>Fecha</FieldLabel>
+            <FieldLabel htmlFor={dateInputId}>
+              {isBackfill ? "Fecha faltante" : "Fecha"}
+            </FieldLabel>
             <ReportDatePicker
               id={dateInputId}
               defaultValue={reportDate}
